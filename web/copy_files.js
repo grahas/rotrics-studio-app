@@ -21,7 +21,7 @@ const copyDirectorySync = (src, dest) => {
     });
 };
 
-fs.rmdirSync("./build-web", {recursive: true});
+fs.rmSync("./build-web", {recursive: true, force: true});
 fs.mkdirSync("./build-web");
 fs.copyFileSync("./index.html", "./build-web/index.html");
 copyDirectorySync("../../rotrics-scratch-blocks/media", "./build-web/asset/rotrics-scratch-blocks/media/");

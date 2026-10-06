@@ -3,8 +3,8 @@ import _ from 'lodash';
 import path from 'path';
 import isOnline from "is-online";
 import request from 'request';
-import SerialPort from 'serialport';
-import ReadLineParser from '@serialport/parser-readline';
+import {SerialPort} from 'serialport';
+import {ReadlineParser as ReadLineParser} from '@serialport/parser-readline';
 import {start_frame, end_frame, eot, chunk_frame} from "./frameUtil.js";
 import serialPortManager from './serialPortManager.js';
 import gcodeSender from "./gcode/gcodeSender.js";
@@ -485,7 +485,7 @@ class FirmwareUpgradeManager {
     async openSerialPort() {
         const exe = () => {
             return new Promise(resolve => {
-                this.serialPort = new SerialPort(this.path, {baudRate, autoOpen: false});
+                this.serialPort = new SerialPort({path: this.path, baudRate, autoOpen: false});
                 this.serialPort.open((error) => {
                     if (error) {
                         console.log("open sp failed: " + error.message)

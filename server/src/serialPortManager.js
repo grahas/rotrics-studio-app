@@ -1,6 +1,6 @@
 import EventEmitter from 'events';
-import SerialPort from 'serialport';
-import ReadLineParser from '@serialport/parser-readline';
+import {SerialPort} from 'serialport';
+import {ReadlineParser as ReadLineParser} from '@serialport/parser-readline';
 import {
     SERIAL_PORT_PATH_UPDATE,
     SERIAL_PORT_GET_OPENED,
@@ -53,7 +53,7 @@ class SerialPortManager extends EventEmitter {
     }
 
     _openNew(path) {
-        this.serialPort = new SerialPort(path, {baudRate, autoOpen: false});
+        this.serialPort = new SerialPort({path, baudRate, autoOpen: false});
 
         //data: 类型是buffer的数组
         //将buffer转为string，发送到前端
