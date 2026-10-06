@@ -7,7 +7,15 @@ fs.readdirSync('./node_modules')
         return ['.bin'].indexOf(x) === -1;
     })
     .forEach((mod) => {
-        nodeModules[mod] = 'commonjs ' + mod;
+        if (mod.startsWith('@')) {
+            // scoped packages live one directory deeper (e.g. @serialport/parser-readline)
+            fs.readdirSync(path.join('./node_modules', mod)).forEach((scopedMod) => {
+                const name = `${mod}/${scopedMod}`;
+                nodeModules[name] = 'commonjs ' + name;
+            });
+        } else {
+            nodeModules[mod] = 'commonjs ' + mod;
+        }
     });
 
 module.exports = {
