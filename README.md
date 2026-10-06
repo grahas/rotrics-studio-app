@@ -1,24 +1,26 @@
-# 从零开始构建Rotrics Studio App
+**English** | [中文](README.zh-CN.md)
 
-## 1.安装和配置
-安装java，python2.7，node（>=14.1.0）     
-配置环境变量：python，java      
-配置cnpm：https://developer.aliyun.com/mirror/NPM?from=tnpm    
-安装git bash（mac不需要安装；windows需要使用linux terminal；git bash比较好用）  
+# Building Rotrics Studio App from Scratch
 
-编译serialport和rotrics-scratch-blocks都需要用到python2.7    
-安装最新的visual studio（要选择professional版本）（编译serialport时候需要）  
-安装时候要注意，一定要选择“Desktop development with C++”，在workload选项中  
-否则会报错：“Visual Studio C++ core feature” missing  
-  
-## 2.clone代码并安装依赖
+## 1. Installation and Configuration
+Install java, python2.7, node (>=14.1.0)
+Configure environment variables: python, java
+Configure cnpm: https://developer.aliyun.com/mirror/NPM?from=tnpm
+Install git bash (not needed on mac; on windows you need a linux terminal; git bash works well)
+
+Compiling serialport and rotrics-scratch-blocks both require python2.7
+Install the latest Visual Studio (choose the Professional edition) (required when compiling serialport)
+When installing, make sure to select "Desktop development with C++" under the workload options
+Otherwise you will get the error: "Visual Studio C++ core feature" missing
+
+## 2. Clone the code and install dependencies
 ```bash
-# clone repository，必须三个repository都放在同一个文件夹下（影响copy_files.js脚本执行）
+# clone repository, all three repositories must be placed under the same folder (this affects the copy_files.js script execution)
 git clone https://github.com/Rotrics-Dev/rotrics-studio-app.git
 git clone https://github.com/Rotrics-Dev/rotrics-scratch-vm.git
 git clone https://github.com/Rotrics-Dev/rotrics-scratch-blocks.git
 
-# npm太慢，推荐cnpm
+# npm is too slow, cnpm is recommended
 cd rotrics-scratch-vm
 cnpm install
 npm link
@@ -34,34 +36,34 @@ cd rotrics-studio-app/web
 cnpm install
 
 cd rotrics-studio-app/electron
-#electron用于打包，特殊，需要使用npm安装；cnpm和npm并不相同；
-#使用cnpm安装后，打包的软件打开速度特别慢；耐心等，可能需要半小时
+#electron is used for packaging, it's special and must be installed using npm; cnpm and npm are not the same;
+#if installed with cnpm, the packaged app will open extremely slowly; please be patient, it may take half an hour
 npm install
-#重新编译native module(目前只用到serialport)，保证和electron node版本对应；
-#耐心等，可能需要半小时
+#recompile the native module (currently only serialport is used), to make sure it matches the electron node version;
+#please be patient, it may take half an hour
 npm run rebuild  
 ```
 
-## 3.其他
-编译rotrics-scratch-blocks：  
-for mac: npm run prepublish-mac  
-for win: npm run prepublish-win  
+## 3. Other
+Compile rotrics-scratch-blocks:
+for mac: npm run prepublish-mac
+for win: npm run prepublish-win
 
-复制文件  
-cd rotrics-studio-app/web  
-新建文件夹：build-web，并将web/index.html copy到build-web下  
+Copy files
+cd rotrics-studio-app/web
+Create a new folder: build-web, and copy web/index.html into build-web
 
-## 4.开发环境下运行
+## 4. Running in the development environment
 ```bash
 cd rotrics-studio-app/server
 npm start
 
 cd rotrics-studio-app/web
 npm start
-##若一切正常，可以看到页面正常显示：http://localhost:8080/  
+##if everything is working, you should be able to see the page displayed normally at: http://localhost:8080/  
 ``` 
 
-## 5.Electron环境下运行
+## 5. Running in the Electron environment
 ```bash
 cd rotrics-studio-app/server
 npm run build
@@ -71,41 +73,41 @@ npm run build
 
 cd rotrics-studio-app/electron
 npm start
-# 若提示serialport版本与electron node版本不对应，请执行：npm run rebuild
+# if you get a message that the serialport version does not match the electron node version, run: npm run rebuild
 ```
 
-## 6.Electron打包
+## 6. Packaging Electron
 ```bash
 cd rotrics-studio-app/electron
 #for mac: 
-#必须在mac电脑上
+#must be run on a mac computer
 npm run build:mac-x64
 
 #for win:
-#必须在windows电脑上
+#must be run on a windows computer
 npm run build:win-x64
 ```
 
-# 项目结构简述
-包括三个子项目，都是node项目  
+# Project Structure Overview
+Consists of three sub-projects, all of which are node projects
 ### web
-前端部分, build后得到"index.html+js+资源"，electron运行时执行loadFile(index.html)
+The frontend part. After building, you get "index.html + js + resources"; when electron runs, it executes loadFile(index.html)
 ### server
-local server, 给web端提供http api和socket connection，再访问native层  
+The local server, which provides the web client with an http api and a socket connection, and then accesses the native layer
 ### electron
-web中运行时候，local server使用指定address：http://localhost:9000  
-electron运行时，动态获取端口，并将local server address挂在window下  
-方便web端获取，从未建立socket connect和使用http api  
-electron执行main.js时候，先启动local server，成功后再加载web端build得到的index.html
+When running inside web, the local server uses a fixed address: http://localhost:9000
+When running inside electron, the port is obtained dynamically, and the local server address is attached under window
+so that the web client can retrieve it conveniently, since a socket connection and the http api have not been established yet
+When electron executes main.js, it first starts the local server, and only after that succeeds does it load the index.html built from the web client
 
-## 注意事项
+## Notes
 node: >=14.1.0
 electron: >=9.0.0  
 serialport: >=9.0.0   
 
-若提示serialport版本与electron node版本不对应，请执行：npm run rebuild  
-electron依赖的serialport必须和electron node版本对应，因此需要rebuild  
-electron和server的package.json中的dependencies需要保持一致   
-electron下，安装node_modules必须使用npm而不是cnpm  
+If you get a message that the serialport version does not match the electron node version, run: npm run rebuild
+The serialport version that electron depends on must match the electron node version, so a rebuild is required
+The dependencies in the package.json files of electron and server must stay consistent
+Under electron, node_modules must be installed using npm, not cnpm
 
-要保证两个文件内容一致：server/src/constants.js和web/src/constants.js  
+Make sure the content of these two files stays consistent: server/src/constants.js and web/src/constants.js
