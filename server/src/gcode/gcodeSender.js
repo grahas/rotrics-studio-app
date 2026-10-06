@@ -1,5 +1,5 @@
 import EventEmitter from 'events';
-import serialPortManager from '../serialPortManager.js';
+import linkClient from '../linkClient.js';
 import deviceStateMonitor from '../deviceStateMonitor.js';
 import {GCODE_SENDER_REFUSE, GCODE_SENDER_STATUS_CHANGE, GCODE_SENDER_PROGRESS_CHANGE} from "../constants";
 
@@ -47,12 +47,12 @@ class GcodeSender extends EventEmitter {
     //TODO: serial port断开时候的处理
     //TODO: 逻辑，laser cover, 打开的情况下，再执行laser task。应该监听serial port data，构造其中就监听
     async start(gcode, isAckChange, isLaser, taskId) {
-        if (!serialPortManager.getOpened()) {
+        if (!linkClient.getOpened()) {
             const msg = "Please connect DexArm first";
             this.emit(GCODE_SENDER_REFUSE, {msg});
             return;
         }
-        if (!serialPortManager.readLineParser) {
+        if (!linkClient.readLineParser) {
             const msg = "Param error: readLineParser is null";
             this.emit(GCODE_SENDER_REFUSE, {msg});
             return;
@@ -155,7 +155,7 @@ class GcodeSender extends EventEmitter {
         console.log(`发送行 ${line}`)
 
         return new Promise((resolve) => {
-            serialPortManager.write(`${line}\n`);
+            linkClient.write(`${line}\n`);
             console.log(`串口写入行 ${line}`)
             const onData = (data) => {
                 data = data.trim();
@@ -166,11 +166,11 @@ class GcodeSender extends EventEmitter {
                 }
 
                 if (data.indexOf("ok") === 0) {
-                    serialPortManager.readLineParser.removeListener('data', onData);
+                    linkClient.readLineParser.removeListener('data', onData);
                     console.log(`串口返回ok 移除data监听器`)
                     resolve();
                 } else if (data.indexOf("wait") === 0) {
-                    serialPortManager.write(`${line}\n`)
+                    linkClient.write(`${line}\n`)
                     console.log(`串口返回wait 再次写入行 ${line}`)
                 } else if (data === 'Warning!Laser protection door opened') {
                     console.log('激光警告')
@@ -179,7 +179,7 @@ class GcodeSender extends EventEmitter {
                     }
                 }
             };
-            serialPortManager.readLineParser.on('data', onData);
+            linkClient.readLineParser.on('data', onData);
         });
     }
 

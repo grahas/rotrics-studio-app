@@ -103,12 +103,13 @@ class Index extends React.Component {
         setTimeout(() => {
             // console.log('delayToConnectSerialPort' + Date.now());
             const {lastConnectSerialPort} = that.state;
-            const {paths} = that.props;
-            if ((!paths) || (!paths.length) || (paths.indexOf(lastConnectSerialPort) === -1)) {
+            const {networkDevices} = that.props;
+            const device = networkDevices && networkDevices.find(d => d.id === lastConnectSerialPort);
+            if (!device) {
                 this.delayToConnectSerialPort(that, showModal, started, msg);
                 return;
             }
-            this.props.openSerialPort(lastConnectSerialPort);
+            this.props.openSerialPort({host: device.host, port: device.port});
             this.delayToM1112(that, showModal, started, msg);
         }, 1000);
     }
@@ -262,10 +263,10 @@ class Index extends React.Component {
 }
 
 const mapStateToProps = (state) => {
-    const {path, paths} = state.serialPort;
+    const {path, networkDevices} = state.serialPort;
     return {
         path,
-        paths
+        networkDevices
     };
 };
 const mapDispatchToProps = (dispatch) => {
@@ -277,7 +278,7 @@ const mapDispatchToProps = (dispatch) => {
         serialPortWrite: (gcode) => {
             dispatch(serialPortActions.write(gcode));
         },
-        openSerialPort: (path) => dispatch(serialPortActions.open(path)),
+        openSerialPort: (target) => dispatch(serialPortActions.open(target)),
     };
 };
 export default connect(mapStateToProps, mapDispatchToProps)(withTranslation()(Index));

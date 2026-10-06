@@ -1,5 +1,63 @@
 const {app, BrowserWindow, shell, Menu, MenuItem, globalShortcut, powerSaveBlocker} = require('electron');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const {fork} = require('child_process');
+
+// Spawns a local dexarm-link daemon (see https://github.com/grahas/dexarm-link)
+// as a child process so "USB mode" is just another dexarm-link endpoint the
+// renderer discovers via mDNS, bound to the same host the app runs on. It's
+// visually distinguishable in the discovery list only by deviceName/host -
+// the server/web side never special-cases it.
+let dexarmLinkProcess = null;
+
+function startDexarmLink() {
+    let dexarmLinkEntry;
+    try {
+        dexarmLinkEntry = require.resolve('dexarm-link');
+    } catch (error) {
+        console.error('[dexarm-link] dependency not found, skipping local daemon spawn:', error.message);
+        return;
+    }
+
+    // Isolate this bundled instance's config (deviceName/tcpPort/etc.) from
+    // any standalone dexarm-link install the user might also have on this
+    // machine, by pointing it at its own config dir inside userData.
+    const configDir = path.join(app.getPath('userData'), 'dexarm-link');
+    const configPath = path.join(configDir, 'config.json');
+    try {
+        fs.mkdirSync(configDir, {recursive: true});
+        const config = {
+            serialPort: 'auto',
+            tcpPort: 8438,
+            deviceName: `${os.hostname()} (This Computer)`,
+            secureMode: false,
+            pairingTimeoutSeconds: 15,
+        };
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
+    } catch (error) {
+        console.error('[dexarm-link] failed to write local daemon config:', error.message);
+        return;
+    }
+
+    dexarmLinkProcess = fork(dexarmLinkEntry, [], {
+        env: Object.assign({}, process.env, {DEXARM_LINK_CONFIG_DIR: configDir}),
+        silent: true,
+    });
+    dexarmLinkProcess.stdout && dexarmLinkProcess.stdout.on('data', (data) => console.log(`[dexarm-link] ${data}`.trimEnd()));
+    dexarmLinkProcess.stderr && dexarmLinkProcess.stderr.on('data', (data) => console.error(`[dexarm-link] ${data}`.trimEnd()));
+    dexarmLinkProcess.on('exit', (code, signal) => {
+        console.log(`[dexarm-link] local daemon exited (code=${code}, signal=${signal})`);
+        dexarmLinkProcess = null;
+    });
+}
+
+function stopDexarmLink() {
+    if (dexarmLinkProcess) {
+        dexarmLinkProcess.kill('SIGTERM');
+        dexarmLinkProcess = null;
+    }
+}
 
 function setUpMenu() {
     Menu.getApplicationMenu().items.forEach(item => {
@@ -57,6 +115,7 @@ app.allowRendererProcessReuse = false;
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
+    startDexarmLink();
     mainWindow = createWindow();
     app.on('activate', () => {
         // On macOS it's common to re-create a window in the app when the
@@ -74,6 +133,10 @@ app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
         app.quit()
     }
+});
+
+app.on('will-quit', () => {
+    stopDexarmLink();
 });
 
 app.on("browser-window-focus", () => {
