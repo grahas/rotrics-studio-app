@@ -22,6 +22,14 @@
       {
         "from": "resources/untether/${os}-${arch}",
         "to": "untether"
+      },
+      {
+        "from": "electron-builder/icon.png",
+        "to": "icon/icon.png"
+      },
+      {
+        "from": "electron-builder/icon.ico",
+        "to": "icon/icon.ico"
       }
     ],
     "directories": {

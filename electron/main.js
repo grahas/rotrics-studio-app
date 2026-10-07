@@ -24,6 +24,22 @@ function pushLogTail(line) {
     if (untetherLogTail.length > 50) untetherLogTail.shift();
 }
 
+// Must match the "appId" in package.json's build config so Windows groups
+// the taskbar entry under this app instead of under generic "Electron".
+const APP_USER_MODEL_ID = 'com.rotrics.rotrics-studio-app';
+
+// Resolves the window/taskbar/dock icon shipped alongside the app. Packaged
+// builds get it from extraResources (see package.json); dev mode reads
+// straight out of electron-builder/, which already holds the source icons
+// electron-builder itself uses for the packaged app/installer icon.
+function appIconPath() {
+    const file = process.platform === 'win32' ? 'icon.ico' : 'icon.png';
+    if (app.isPackaged) {
+        return path.join(process.resourcesPath, 'icon', file);
+    }
+    return path.join(__dirname, 'electron-builder', file);
+}
+
 // Resolves the bundled binary: packaged apps get it from extraResources,
 // dev mode reads straight out of electron/resources (as produced locally by
 // `node electron/scripts/fetch-untether.js`, which defaults to the host
@@ -151,6 +167,7 @@ function createWindow() {
         height: 768,
         minWidth: 850,
         minHeight: 400,
+        icon: appIconPath(),
         webPreferences: {
             preload: path.join(__dirname, './build-server/startLocalServer.js'),
             // `nodeIntegration`/`contextIsolation` belong under `webPreferences`
@@ -186,12 +203,28 @@ let mainWindow = null
 //https://github.com/electron/electron/issues/18397
 app.allowRendererProcessReuse = false;
 
+// Windows groups taskbar entries/jump lists by AppUserModelId; without this
+// a dev run (and even some packaged runs) gets lumped under generic
+// "Electron" instead of showing this app's own icon/name. Packaged NSIS
+// installs normally register this via the installer, but it's harmless and
+// needed in dev, so set it unconditionally and as early as possible.
+if (process.platform === 'win32') {
+    app.setAppUserModelId(APP_USER_MODEL_ID);
+}
+
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
     startUntether();
     mainWindow = createWindow();
+    if (process.platform === 'darwin' && !app.isPackaged) {
+        // Packaged mac builds already get the right dock icon baked into
+        // the .app bundle via electron-builder's mac.icon config; only a
+        // dev run (plain `electron .`) needs this to avoid showing the
+        // default Electron icon.
+        app.dock.setIcon(path.join(__dirname, 'electron-builder', 'icon.png'));
+    }
     app.on('activate', () => {
         // On macOS it's common to re-create a window in the app when the
         // dock icon is clicked and there are no other windows open.
