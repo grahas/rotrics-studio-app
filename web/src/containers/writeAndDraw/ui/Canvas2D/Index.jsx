@@ -62,6 +62,7 @@ class Index extends React.Component {
         window.removeEventListener('click', this.setRenderTimer)
         window.removeEventListener('keydown', this.setRenderTimer)
         window.removeEventListener('keydown', this.setRenderTimer)
+        if (this.printablePlate) this.printablePlate.dispose();
     }
 
     componentWillReceiveProps(nextProps) {
@@ -76,6 +77,7 @@ class Index extends React.Component {
             this.setupMouseController();
             this.props.setRendererParent(this.modelGroup);
             this.animate();
+            if (this.printablePlate) this.printablePlate.dispose();
             this.printablePlate = new PrintablePlate(
                 new THREE.Vector2(450, 260), 
                 this.props.workHeight, 
