@@ -1,4 +1,29 @@
+import isElectron from 'is-electron';
 import packageJson from "../../../electron/package.json";
+
+// A build is a "dev build" (and should never nag the user with the update
+// prompt) when:
+// - it's running inside an un-packaged Electron app (`electron .` from
+//   source, as opposed to an installed/packaged build) - main.js sets
+//   `process.env.ELECTRON_APP_PACKAGED` before creating the window, which
+//   is inherited by this renderer process since nodeIntegration is enabled;
+// - or it's the plain web bundle served by webpack-dev-server
+//   (`process.env.NODE_ENV !== 'production'`, baked in at build time);
+// - or the version string itself carries a prerelease/dev suffix
+//   (e.g. "1.0.1-dev", "1.0.1-rc1");
+// - or the check is explicitly force-disabled via `ROTRICS_SKIP_UPDATE_CHECK=1`.
+const isDevBuild = () => {
+    if (typeof process !== 'undefined' && process.env && process.env.ROTRICS_SKIP_UPDATE_CHECK === '1') {
+        return true;
+    }
+    if (isElectron()) {
+        const packaged = typeof process !== 'undefined' && process.env && process.env.ELECTRON_APP_PACKAGED;
+        if (packaged !== '1') return true;
+    } else if (process.env.NODE_ENV !== 'production') {
+        return true;
+    }
+    return /-(dev|alpha|beta|rc)/i.test(packageJson.version);
+};
 
 /**
  * code1>code2:return 1
@@ -81,6 +106,10 @@ const getLatestSoftwareVersion = async () => {
  * @param onNewVersion
  */
 const checkUpdate = (onNewVersion) => {
+    if (isDevBuild()) {
+        console.log('Skipping software update check for a dev/un-packaged build.');
+        return;
+    }
     setTimeout(async () => {
         const latestVersionData = await getLatestSoftwareVersion();
         if (!latestVersionData) return;//没有找到任何版本信息

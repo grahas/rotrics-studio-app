@@ -14,7 +14,15 @@ class StoreManager {
         this.path_p3d_cura_engine = null;
 
         if (isElectron()) {
-            this.dir_user_data = (electron.app || electron.remote.app).getPath('userData');
+            // Preload scripts (where this module actually runs under Electron)
+            // never had direct access to the main process's `app` object, and
+            // Electron removed the old built-in `remote` module in v14+. The
+            // userData path is passed down via an env var set by main.js
+            // before the window/preload is created; `electron.app` is kept as
+            // a fallback for the (currently unused) case of this module being
+            // required directly from the main process.
+            this.dir_user_data = process.env.ELECTRON_USER_DATA_DIR
+                || (electron.app && electron.app.getPath('userData'));
         } else {
             this.dir_user_data = path.join(__dirname, '..', 'static');
         }

@@ -71,6 +71,7 @@
     "electron-builder": "^22.6.1"
   },
   "dependencies": {
+    "@untether/client": "file:../server/vendor/untether-client-0.1.0.tgz",
     "image-size": "^0.8.3",
     "is-electron": "^2.2.0",
     "is-online": "^8.4.0",

@@ -136,16 +136,37 @@ function setUpMenu() {
 
 function createWindow() {
     setUpMenu();
+    // Electron removed the built-in `remote` module in v14 (and preload scripts
+    // never had `electron.app` directly - only the main process does), so
+    // storeManager.js can no longer reach `electron.remote.app`/`electron.app`
+    // from the preload context. Pass the userData path down via env var instead
+    // (inherited by the renderer process the preload script runs in).
+    process.env.ELECTRON_USER_DATA_DIR = app.getPath('userData');
+    // Lets the renderer (web/src/utils/VersionUtils.js) tell an installed
+    // build apart from a dev run (`electron .` from source), so the
+    // "new version available" nag only ever shows in real releases.
+    process.env.ELECTRON_APP_PACKAGED = app.isPackaged ? '1' : '0';
     const mainWindow = new BrowserWindow({
         width: 1280,
         height: 768,
         minWidth: 850,
         minHeight: 400,
         webPreferences: {
-            preload: path.join(__dirname, './build-server/startLocalServer.js')
+            preload: path.join(__dirname, './build-server/startLocalServer.js'),
+            // `nodeIntegration`/`contextIsolation` belong under `webPreferences`
+            // (they were previously set as sibling options of it, which
+            // Electron silently ignores - a regression from the Electron 18
+            // upgrade). The app's whole "preload sets `window.serverAddress`,
+            // the page reads it" bootstrap (see server/src/start-server.js and
+            // web/src/reducers/socket.js) depends on the preload and page
+            // sharing one JS global object, which requires both
+            // `nodeIntegration: true` and `contextIsolation: false` -
+            // Electron's modern default (`contextIsolation: true`) runs the
+            // preload in an isolated world, invisible to the page.
+            nodeIntegration: true,
+            contextIsolation: false
         },
-        devTools: true,
-        nodeIntegration: true,
+        devTools: true
     });
     mainWindow.loadFile('./build-web/index.html')
     // mainWindow.webContents.openDevTools();

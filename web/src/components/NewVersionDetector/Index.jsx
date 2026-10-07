@@ -2,6 +2,7 @@ import React from 'react';
 import showdown from 'showdown';
 import checkUpdate from '../../utils/VersionUtils';
 import {Modal} from 'antd';
+import {withTranslation} from 'react-i18next';
 
 class Index extends React.Component {
     state = {}
@@ -14,6 +15,7 @@ class Index extends React.Component {
 
     render() {
         let info = '';
+        const {t} = this.props;
         const {showUpdate, latestVersionData} = this.state;
         if (showUpdate && latestVersionData && latestVersionData.infos.length > 0) {
             const converter = new showdown.Converter()
@@ -22,7 +24,7 @@ class Index extends React.Component {
         return (
             <div>
                 {this.state.showUpdate && <Modal
-                    title={"New Version Rotrics Studio Is Available"}
+                    title={t('New Version Rotrics Studio Is Available')}
                     visible={this.state.showUpdate}
                     onCancel={() => {
                         this.setState({showUpdate: false});
@@ -32,11 +34,11 @@ class Index extends React.Component {
                         window.open('https://www.rotrics.com/pages/download', '_blank');
                     }}>
                     <div dangerouslySetInnerHTML={{__html: info}}/>
-                    <h3>Download the latest Rotrics Studio now?</h3>
+                    <h3>{t('Download the latest Rotrics Studio now?')}</h3>
                 </Modal>}
             </div>
         );
     }
 }
 
-export default Index;
+export default withTranslation()(Index);
