@@ -317,9 +317,9 @@ const setupSocket = () => {
             });
 
             //注意：最好都使用箭头函数，否则this可能指向其他对象
-            //network device discovery (mDNS) - the only way the app finds connection
-            //targets now, whether that's the Electron-bundled local dexarm-link
-            //instance or a remote Raspberry Pi one.
+            //network device discovery (mDNS/status API) - the only way the app finds
+            //connection targets now, whether that's the Electron-bundled local
+            //untether instance or a remote Raspberry Pi one.
             discoveryManager.on(NETWORK_DEVICE_LIST_UPDATE, (devices) => {
                 socket.emit(NETWORK_DEVICE_LIST_UPDATE, devices);
             });
@@ -340,7 +340,7 @@ const setupSocket = () => {
                 socket.emit(SERIAL_PORT_GET_OPENED, path);
             });
 
-            //{host, port} of a dexarm-link endpoint (discovered via mDNS)
+            //{host, port} of an untether endpoint (discovered via mDNS/status API)
             socket.on(SERIAL_PORT_OPEN, ({host, port}) => {
                 linkClient.open({host, port});
                 // Debug 解决“G-code sending task started, please do not repeat”报错导致无法操作机械臂的bug

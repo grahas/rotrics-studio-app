@@ -1,61 +1,115 @@
-const {app, BrowserWindow, shell, Menu, MenuItem, globalShortcut, powerSaveBlocker} = require('electron');
+const {app, BrowserWindow, shell, Menu, MenuItem, globalShortcut, powerSaveBlocker, dialog} = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const {fork} = require('child_process');
+const {spawn} = require('child_process');
 
-// Spawns a local dexarm-link daemon (see https://github.com/grahas/dexarm-link)
-// as a child process so "USB mode" is just another dexarm-link endpoint the
-// renderer discovers via mDNS, bound to the same host the app runs on. It's
-// visually distinguishable in the discovery list only by deviceName/host -
-// the server/web side never special-cases it.
-let dexarmLinkProcess = null;
+// Spawns a local untether daemon (see https://github.com/grahas/untether) as
+// a child process so "USB mode" is just another untether endpoint the
+// renderer discovers via mDNS / the local status API, bound to this same
+// machine. It's visually distinguishable in the discovery list only by its
+// deviceName/host - the server/web side never special-cases it. The binary
+// is bundled per-platform via electron-builder's extraResources (see
+// package.json), produced ahead of time by electron/scripts/fetch-untether.js.
 
-function startDexarmLink() {
-    let dexarmLinkEntry;
-    try {
-        dexarmLinkEntry = require.resolve('dexarm-link');
-    } catch (error) {
-        console.error('[dexarm-link] dependency not found, skipping local daemon spawn:', error.message);
+// untether's documented exit codes (see grahas/untether cmd/untether/main.go).
+const UNTETHER_EXIT_ALREADY_RUNNING = 3; // another instance already owns the devices - not an error
+const UNTETHER_EXIT_PORT_IN_USE = 4; // status port held by some other, non-untether program
+
+let untetherProcess = null;
+const untetherLogTail = [];
+
+function pushLogTail(line) {
+    untetherLogTail.push(line);
+    if (untetherLogTail.length > 50) untetherLogTail.shift();
+}
+
+// Resolves the bundled binary: packaged apps get it from extraResources,
+// dev mode reads straight out of electron/resources (as produced locally by
+// `node electron/scripts/fetch-untether.js`, which defaults to the host
+// platform/arch).
+function untetherBinaryPath() {
+    const ext = process.platform === 'win32' ? '.exe' : '';
+    if (app.isPackaged) {
+        return path.join(process.resourcesPath, 'untether', `untether${ext}`);
+    }
+    const devOs = {darwin: 'mac', win32: 'win', linux: 'linux'}[process.platform];
+    const devArch = {x64: 'x64', arm64: 'arm64'}[process.arch];
+    return path.join(__dirname, 'resources', 'untether', `${devOs}-${devArch}`, `untether${ext}`);
+}
+
+function ensureUntetherConfig(configPath) {
+    if (fs.existsSync(configPath)) return; // only written on first run, see spec
+    fs.mkdirSync(path.dirname(configPath), {recursive: true});
+    const config = {
+        deviceName: `${os.hostname()} (This Computer)`,
+        startOnBoot: false,
+    };
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
+}
+
+function startUntether() {
+    const binPath = untetherBinaryPath();
+    if (!fs.existsSync(binPath)) {
+        console.error(`[untether] bundled binary not found at ${binPath}.`);
+        console.error('[untether] in dev mode, run `node electron/scripts/fetch-untether.js` once, or start an untether instance manually ("USB mode" will be unavailable until one is reachable).');
         return;
     }
 
-    // Isolate this bundled instance's config (deviceName/tcpPort/etc.) from
-    // any standalone dexarm-link install the user might also have on this
-    // machine, by pointing it at its own config dir inside userData.
-    const configDir = path.join(app.getPath('userData'), 'dexarm-link');
+    const configDir = path.join(app.getPath('userData'), 'untether');
     const configPath = path.join(configDir, 'config.json');
-    try {
-        fs.mkdirSync(configDir, {recursive: true});
-        const config = {
-            serialPort: 'auto',
-            tcpPort: 8438,
-            deviceName: `${os.hostname()} (This Computer)`,
-            secureMode: false,
-            pairingTimeoutSeconds: 15,
-        };
-        fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
-    } catch (error) {
-        console.error('[dexarm-link] failed to write local daemon config:', error.message);
-        return;
-    }
+    ensureUntetherConfig(configPath);
 
-    dexarmLinkProcess = fork(dexarmLinkEntry, [], {
-        env: Object.assign({}, process.env, {DEXARM_LINK_CONFIG_DIR: configDir}),
-        silent: true,
+    untetherProcess = spawn(binPath, ['run', '--config', configPath, '--watch-stdin'], {
+        stdio: ['pipe', 'pipe', 'pipe'],
     });
-    dexarmLinkProcess.stdout && dexarmLinkProcess.stdout.on('data', (data) => console.log(`[dexarm-link] ${data}`.trimEnd()));
-    dexarmLinkProcess.stderr && dexarmLinkProcess.stderr.on('data', (data) => console.error(`[dexarm-link] ${data}`.trimEnd()));
-    dexarmLinkProcess.on('exit', (code, signal) => {
-        console.log(`[dexarm-link] local daemon exited (code=${code}, signal=${signal})`);
-        dexarmLinkProcess = null;
+    untetherProcess.stdout.on('data', (data) => {
+        const text = data.toString();
+        pushLogTail(text.trimEnd());
+        console.log(`[untether] ${text}`.trimEnd());
+    });
+    untetherProcess.stderr.on('data', (data) => {
+        const text = data.toString();
+        pushLogTail(text.trimEnd());
+        console.error(`[untether] ${text}`.trimEnd());
+    });
+    untetherProcess.on('exit', (code, signal) => {
+        console.log(`[untether] local daemon exited (code=${code}, signal=${signal})`);
+        untetherProcess = null;
+        if (code === UNTETHER_EXIT_ALREADY_RUNNING) {
+            // Not an error: an already-running instance (e.g. an installed
+            // service) owns the status port and the arms - the app will use
+            // it via mDNS / the local status API exactly like any other
+            // reachable untether instance.
+            console.log('[untether] another untether instance already owns the status port; using it instead of spawning our own.');
+            return;
+        }
+        if (code === UNTETHER_EXIT_PORT_IN_USE) {
+            dialog.showErrorBox(
+                'Rotrics Studio',
+                'The local untether status port (127.0.0.1:8437) is in use by another program, so this app could not start its bundled USB-connection helper. '
+                + 'Network-connected arms will still work; USB arms on this computer will not be discoverable until the conflicting program is closed.'
+            );
+            return;
+        }
+        if (code !== 0 && code !== null) {
+            dialog.showErrorBox(
+                'Rotrics Studio',
+                `The bundled untether helper exited unexpectedly (code ${code}). USB-connected arms on this computer will not be discoverable.\n\nLast log lines:\n${untetherLogTail.join('\n')}`
+            );
+        }
     });
 }
 
-function stopDexarmLink() {
-    if (dexarmLinkProcess) {
-        dexarmLinkProcess.kill('SIGTERM');
-        dexarmLinkProcess = null;
+function stopUntether() {
+    if (untetherProcess) {
+        try {
+            untetherProcess.stdin.end();
+        } catch (error) {
+            // ignore - process may already be exiting
+        }
+        untetherProcess.kill();
+        untetherProcess = null;
     }
 }
 
@@ -115,7 +169,7 @@ app.allowRendererProcessReuse = false;
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
-    startDexarmLink();
+    startUntether();
     mainWindow = createWindow();
     app.on('activate', () => {
         // On macOS it's common to re-create a window in the app when the
@@ -136,7 +190,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('will-quit', () => {
-    stopDexarmLink();
+    stopUntether();
 });
 
 app.on("browser-window-focus", () => {

@@ -131,16 +131,31 @@ class Index extends React.Component {
             }
         }
 
-        // Purely a UX nicety: flag the Electron-bundled local dexarm-link
+        // Purely a UX nicety: flag the Electron-bundled local untether
         // instance (bound to loopback) so it's easy to tell apart from a
         // remote Raspberry Pi device in the list - not a functional branch,
         // both are opened the exact same way.
         const isLocalDevice = (device) => device.host === '127.0.0.1' || device.host === 'localhost';
 
-        const options = networkDevices.map((device) => ({
-            label: `${device.deviceName}${isLocalDevice(device) ? ` (${t('This Computer')})` : ''}`,
-            value: device.id,
-        }));
+        const options = networkDevices.map((device) => {
+            // connected===false: the daemon advertised the device but lost contact with
+            // the arm (unplugged/powered off) - connecting would fail immediately.
+            // inUse: another client already holds an exclusive session with this arm.
+            // compatible===false: protocol/profile version this app doesn't support.
+            const disconnected = device.connected === false;
+            const inUse = device.inUse === true;
+            const incompatible = device.compatible === false;
+            let suffix = '';
+            if (isLocalDevice(device)) suffix += ` (${t('This Computer')})`;
+            if (disconnected) suffix += ` - ${t('disconnected')}`;
+            else if (inUse) suffix += ` - ${t('in use by another client')}`;
+            else if (incompatible) suffix += ` - ${t('update required')}`;
+            return {
+                label: `${device.deviceName}${suffix}`,
+                value: device.id,
+                disabled: disconnected || inUse || incompatible,
+            };
+        });
         return (
             <div
                 style={{

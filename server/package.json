@@ -1,7 +1,8 @@
 {
   "scripts": {
     "start": "node ./index.js",
-    "build": "webpack --mode=production"
+    "build": "webpack --mode=production",
+    "test:integration": "node --test test/integration/*.test.js"
   },
   "devDependencies": {
     "babel-preset-env": "^1.7.0",
@@ -11,8 +12,7 @@
     "webpack-cli": "^3.3.2"
   },
   "dependencies": {
-    "@serialport/parser-readline": "^13.0.0",
-    "bonjour-service": "^1.4.4",
+    "@untether/client": "file:vendor/untether-client-0.1.0.tgz",
     "image-size": "^0.8.3",
     "is-electron": "^2.2.0",
     "is-online": "^8.4.0",
@@ -23,7 +23,6 @@
     "koa-static": "^5.0.0",
     "lodash": "^4.17.15",
     "request": "^2.88.2",
-    "serialport": "^13.0.0",
     "socket.io": "^2.3.0",
     "text-to-svg": "^3.1.5",
     "three-math": "^0.69.0",

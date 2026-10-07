@@ -26,8 +26,8 @@ export const SERIAL_PORT_ERROR = 'SERIAL_PORT_ERROR';
 export const SERIAL_PORT_DATA = 'SERIAL_PORT_DATA';
 export const SERIAL_PORT_WRITE = 'SERIAL_PORT_WRITE'; //通过serial port发送数据，比如：固件升级相关数据，单条gcode等
 
-// network port (dexarm-link daemon over TCP)
-export const NETWORK_DEVICE_LIST_UPDATE = 'NETWORK_DEVICE_LIST_UPDATE'; //mDNS可见的dexarm-link设备列表
+// network port (untether daemon over TCP, formerly dexarm-link)
+export const NETWORK_DEVICE_LIST_UPDATE = 'NETWORK_DEVICE_LIST_UPDATE'; //mDNS/状态API可见的untether设备列表
 
 // gcode sender
 export const GCODE_SENDER_REFUSE = 'GCODE_SENDER_REFUSE'; //data: {msg}

@@ -1,5 +1,5 @@
 import EventEmitter from 'events';
-import net from 'net';
+import {LineConnection, BusyError} from '@untether/client';
 import {
     SERIAL_PORT_OPEN,
     SERIAL_PORT_CLOSE,
@@ -9,41 +9,31 @@ import {
     SERIAL_PORT_DATA,
 } from "./constants.js"
 
-const PAIRING_TIMEOUT_MS = 5000;
-// Periodic keepalive so a silently-dropped TCP connection (e.g. wifi roam,
-// router NAT timeout) is detected instead of looking "open" forever. The
-// daemon just replies $PONG and we don't do anything with it other than
-// logging - this is purely a liveness probe.
-const PING_INTERVAL_MS = 10000;
-
 /**
- * The app's only connection path to a DexArm: a TCP client to a dexarm-link
- * daemon (see grahas/dexarm-link). There is no direct USB-serial code path
- * in server/ anymore - "USB mode" is just a dexarm-link instance bundled
- * with the Electron app and spawned as a local child process talking to
- * 127.0.0.1 (see electron/main.js); from here it's indistinguishable from
- * a remote Raspberry-Pi instance.
+ * The app's only connection path to a DexArm: a TCP client to an untether
+ * daemon (see grahas/untether, formerly dexarm-link). There is no direct
+ * USB-serial code path in server/ anymore - "USB mode" is just an untether
+ * instance bundled with the Electron app and spawned as a local child
+ * process talking to 127.0.0.1 (see electron/main.js); from here it's
+ * indistinguishable from a remote Raspberry-Pi instance.
  *
  * Same public interface the old serialPortManager.js exposed
  * (open/close/write/getOpened, same SERIAL_PORT_* events), so downstream
  * consumers (gcodeSender.js, gcodeSender2.js, deviceStateMonitor.js,
  * frontEndPositionMonitor.js) need no changes beyond the import path.
  *
- * Wire protocol (see grahas/dexarm-link src/tcpServer.js):
- * - newline-delimited lines
- * - lines starting with '$' are control frames handled by the daemon
- *   ($PAIR_CONFIRM -> $PAIR_OK, $PING -> $PONG); everything else is raw
- *   G-code passed through verbatim to the serial port on the daemon side.
+ * This is a thin adapter over @untether/client's LineConnection, which
+ * speaks the daemon's newline-framed wire protocol (lines starting with
+ * '$' are control frames, e.g. $PAIR_CONFIRM/$PAIR_OK, $PING/$PONG;
+ * everything else is raw G-code passed through verbatim) - see
+ * grahas/untether's README and clients/node/README.md for the exact
+ * wire/API details this adapter is built against.
  */
 class LinkClient extends EventEmitter {
     constructor() {
         super();
-        this.socket = null;
+        this.conn = null; // current LineConnection, non-null for the lifetime of one open() target
         this.target = null; // {host, port}
-        this.buffer = '';
-        this.paired = false;
-        this.pairingTimer = null;
-        this.pingTimer = null;
 
         // gcodeSender.js historically reached into serialPortManager's raw
         // node-serialport ReadlineParser (`.readLineParser.on('data', ...)`)
@@ -59,34 +49,11 @@ class LinkClient extends EventEmitter {
     }
 
     get readLineParser() {
-        return (this.socket && this.paired) ? this._readLineParserProxy : null;
+        return (this.conn && this.conn.isOpen) ? this._readLineParserProxy : null;
     }
 
     getOpened() {
-        if (this.socket && this.paired) {
-            return `${this.target.host}:${this.target.port}`;
-        } else {
-            return null;
-        }
-    }
-
-    _clearTimers() {
-        if (this.pairingTimer) {
-            clearTimeout(this.pairingTimer);
-            this.pairingTimer = null;
-        }
-        if (this.pingTimer) {
-            clearInterval(this.pingTimer);
-            this.pingTimer = null;
-        }
-    }
-
-    _reset() {
-        this._clearTimers();
-        this.socket = null;
-        this.target = null;
-        this.buffer = '';
-        this.paired = false;
+        return (this.conn && this.conn.isOpen) ? `${this.conn.host}:${this.conn.port}` : null;
     }
 
     /**
@@ -94,16 +61,16 @@ class LinkClient extends EventEmitter {
      */
     open(target) {
         //already connected/connecting to the same target
-        if (this.socket && this.target && this.target.host === target.host && this.target.port === target.port) {
-            if (this.paired) {
-                console.log(`The dexarm-link endpoint ${target.host}:${target.port} has been opened`);
+        if (this.conn && this.target && this.target.host === target.host && this.target.port === target.port) {
+            if (this.conn.isOpen) {
+                console.log(`The untether endpoint ${target.host}:${target.port} has been opened`);
                 this.emit(SERIAL_PORT_OPEN, this.getOpened());
             }
             return;
         }
 
         //switching targets: close the previous connection first
-        if (this.socket) {
+        if (this.conn) {
             this.close();
         }
 
@@ -112,115 +79,119 @@ class LinkClient extends EventEmitter {
 
     _openNew(target) {
         this.target = target;
-        this.buffer = '';
-        this.paired = false;
 
-        const socket = new net.Socket();
-        this.socket = socket;
+        // reconnect:true replaces the hand-rolled TCP reconnection concerns
+        // the old dexarm-link client had to manage itself (wifi roam/NAT
+        // timeouts etc.): LineConnection retries with exponential backoff
+        // on an unexpected drop and silently resumes on the SAME instance
+        // (re-emitting 'connect') instead of forcing a brand-new open().
+        // SERIAL_PORT_CLOSE is only emitted for an explicit close() or once
+        // reconnection gives up for good - see the 'close' handler below.
+        const conn = new LineConnection(target, {reconnect: true});
+        this.conn = conn;
 
-        this.pairingTimer = setTimeout(() => {
-            console.log(`link client -> pairing timeout: ${target.host}:${target.port}`);
-            this.emit(SERIAL_PORT_ERROR, new Error('Pairing with dexarm-link timed out'));
-            socket.destroy();
-        }, PAIRING_TIMEOUT_MS);
-
-        socket.on('connect', () => {
-            console.log(`link client -> connected: ${target.host}:${target.port}, sending $PAIR_CONFIRM`);
-            socket.write('$PAIR_CONFIRM\n');
+        conn.on('line', (line) => {
+            this.emit(SERIAL_PORT_DATA, {received: line.trim()});
         });
 
-        socket.on('data', (chunk) => this._handleData(chunk));
+        conn.on('connect', () => {
+            console.log(`link client -> open: ${conn.host}:${conn.port}`);
+            this.emit(SERIAL_PORT_OPEN, this.getOpened());
+        });
 
-        socket.on('close', () => {
-            const wasPaired = this.paired;
-            console.log(`link client -> close: ${target.host}:${target.port}`);
-            this._reset();
-            if (wasPaired) {
-                this.emit(SERIAL_PORT_CLOSE, `${target.host}:${target.port}`);
+        conn.on('disconnect', (error) => {
+            // transient drop; LineConnection is attempting to reconnect
+            // (reconnect:true) - nothing to do here beyond logging, a
+            // successful reconnect re-fires 'connect' above.
+            console.log(`link client -> disconnect: ${conn.host}:${conn.port}${error ? ': ' + error.message : ''}`);
+        });
+
+        conn.on('reconnecting', (attempt, delayMs) => {
+            console.log(`link client -> reconnecting to ${conn.host}:${conn.port} (attempt ${attempt}, in ${delayMs}ms)`);
+        });
+
+        conn.on('close', (error) => {
+            console.log(`link client -> close: ${conn.host}:${conn.port}${error ? ': ' + error.message : ''}`);
+            if (this.conn === conn) {
+                this.conn = null;
+                this.target = null;
             }
+            this.emit(SERIAL_PORT_CLOSE, `${conn.host}:${conn.port}`);
         });
 
-        socket.on('error', (error) => {
-            console.log(`link client -> error: ${target.host}:${target.port}: ${error.message}`);
+        conn.on('error', (error) => {
+            console.log(`link client -> error: ${conn.host}:${conn.port}: ${error.message}`);
             this.emit(SERIAL_PORT_ERROR, error);
         });
 
-        socket.connect(target.port, target.host);
-    }
-
-    _handleData(chunk) {
-        this.buffer += chunk.toString('utf8');
-
-        let newlineIndex;
-        // eslint-disable-next-line no-cond-assign
-        while ((newlineIndex = this.buffer.indexOf('\n')) !== -1) {
-            const line = this.buffer.slice(0, newlineIndex).replace(/\r$/, '');
-            this.buffer = this.buffer.slice(newlineIndex + 1);
-            this._handleLine(line);
-        }
-    }
-
-    _handleLine(line) {
-        if (line.length === 0) return;
-
-        if (line.startsWith('$')) {
-            this._handleControlFrame(line);
-            return;
-        }
-
-        this.emit(SERIAL_PORT_DATA, {received: line.trim()});
-    }
-
-    _handleControlFrame(line) {
-        const [command] = line.split(/\s+/);
-        switch (command) {
-            case '$PAIR_OK':
-                if (!this.paired) {
-                    this.paired = true;
-                    if (this.pairingTimer) {
-                        clearTimeout(this.pairingTimer);
-                        this.pairingTimer = null;
-                    }
-                    console.log(`link client -> open: ${this.target.host}:${this.target.port}`);
-                    this.emit(SERIAL_PORT_OPEN, this.getOpened());
-                    this.pingTimer = setInterval(() => {
-                        if (this.socket && !this.socket.destroyed) {
-                            this.socket.write('$PING\n');
-                        }
-                    }, PING_INTERVAL_MS);
-                }
-                break;
-            case '$PONG':
-                // keepalive response, nothing to do
-                break;
-            default:
-                console.warn(`link client -> unknown control frame: ${line}`);
-        }
+        conn.open().catch((error) => {
+            if (this.conn === conn) {
+                this.conn = null;
+                this.target = null;
+            }
+            const message = error instanceof BusyError
+                ? `Arm is in use by ${error.holder || 'another client'}`
+                : error.message;
+            console.log(`link client -> failed to open ${target.host}:${target.port}: ${message}`);
+            this.emit(SERIAL_PORT_ERROR, new Error(message));
+        });
     }
 
     close() {
-        if (this.socket) {
-            //don't reset state here - let the 'close' listener do it once the
-            //socket actually closes, so it can still tell whether we were
-            //paired (open) and emit SERIAL_PORT_CLOSE accordingly.
-            this.socket.destroy();
+        //don't reset this.conn/this.target here - let the 'close' listener
+        //do it once the connection actually closes.
+        if (this.conn) {
+            this.conn.close();
         }
     }
 
-    //data: string|Buffer|Array<number>
+    //data: string (one or more newline-separated G-code lines, with or without a trailing newline)
     write(data) {
-        if (this.socket && this.paired) {
-            this.socket.write(data, (error) => {
-                if (error) {
-                    console.error("write error: " + data);
-                    this.emit(SERIAL_PORT_WRITE_ERROR, error);
-                } else {
-                    this.emit(SERIAL_PORT_WRITE_OK, data);
-                }
-            });
-        } else {
+        if (!this.conn || !this.conn.isOpen) {
             console.warn("Link client is closed");
+            return;
         }
+        try {
+            const lines = String(data).split(/\r?\n/).filter((line) => line.length > 0);
+            for (const line of lines) {
+                this.conn.send(line);
+            }
+            this.emit(SERIAL_PORT_WRITE_OK, data);
+        } catch (error) {
+            console.error("write error: " + data);
+            this.emit(SERIAL_PORT_WRITE_ERROR, error);
+        }
+    }
+
+    /**
+     * Delegate used by firmwareUpgradeManager.js to flash firmware over the
+     * SAME already-open LineConnection (untether is exclusive-access, so
+     * there's no separate "disconnect and reconnect the manager" dance
+     * needed anymore - the daemon handles the arm-side reboot/
+     * re-enumeration transparently while this TCP connection stays up).
+     * @returns {Promise<import('@untether/client').FlashFirmwareResult>}
+     */
+    flashFirmware(image, opts) {
+        if (!this.conn || !this.conn.isOpen) {
+            return Promise.reject(new Error('Link client is closed'));
+        }
+        return this.conn.flashFirmware(image, opts);
+    }
+
+    /**
+     * Delegate used by firmwareUpgradeManager.js: the DexArm firmware
+     * version, reported by untether's $DEVICE_VERSION control frame (the
+     * dexarm profile maps this to M2010 on the arm, see
+     * grahas/untether/profiles/dexarm.yaml). Resolves to just the version
+     * digits (e.g. "2.1.3"), without the "Firmware "/"V" prefixes the old
+     * YMODEM code used to strip off the raw M2010 reply itself.
+     * @returns {Promise<string>}
+     */
+    deviceVersion(timeoutMs) {
+        if (!this.conn || !this.conn.isOpen) {
+            return Promise.reject(new Error('Link client is closed'));
+        }
+        return this.conn.deviceVersion(timeoutMs);
     }
 }
 
