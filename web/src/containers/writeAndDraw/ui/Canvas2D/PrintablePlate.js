@@ -9,10 +9,25 @@ import CoordinateAxes from './CoordinateAxes';
 import TextSprite from '../../../../three-extensions/TextSprite';
 // 箭头；指定点
 import TargetPoint from '../../../../three-extensions/TargetPoint';
-import {FRONT_END, getLimit} from "../../../../utils/workAreaUtils";
+import i18next from 'i18next';
+import {ARM_BASE_FOOTPRINT, FRONT_END, getLimit} from "../../../../utils/workAreaUtils";
 import { getIsAdvance } from '../../../../utils';
 
 const METRIC_GRID_SPACING = 10; // 10 mm
+const ARM_BASE_FOOTPRINT_NAME = 'armBaseFootprint';
+const ARM_BASE_FOOTPRINT_COLOR = colornames('slategray');
+
+const disposeObject3D = (object) => {
+    object.traverse((child) => {
+        child.geometry && child.geometry.dispose();
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+        materials.forEach((material) => {
+            if (!material) return;
+            material.map && material.map.dispose();
+            material.dispose();
+        });
+    });
+};
 
 class PrintablePlate extends THREE.Object3D {
     constructor(size, workHeight, frontEnd, alwaysAddWorkArea) {
@@ -27,11 +42,25 @@ class PrintablePlate extends THREE.Object3D {
         this.workHeight = workHeight;
         this.frontEnd = frontEnd;
         this.alwaysAddWorkArea = alwaysAddWorkArea || false
+        // Rebuild the footprint label when the UI language changes.
+        this._onLanguageChanged = () => this.setUpArmBaseFootprint();
+        i18next.on('languageChanged', this._onLanguageChanged);
         this._setup();
+    }
+
+    dispose() {
+        i18next.off('languageChanged', this._onLanguageChanged);
+        this.removeArmBaseFootprint();
+        const workArea = this.getObjectByName('workArea');
+        if (workArea) {
+            this.remove(workArea);
+            disposeObject3D(workArea);
+        }
     }
 
     updateSize(size) {
         this.size = size;
+        this.removeArmBaseFootprint();
         this.remove(...this.children);
         this._setup();
     }
@@ -164,6 +193,7 @@ class PrintablePlate extends THREE.Object3D {
             workArea.geometry.dispose();
             workArea.material.dispose();
         }
+        this.setUpArmBaseFootprint();
         const green = colornames('green');
         let limit = getLimit(this.workHeight, this.frontEnd);
         if (!limit) {
@@ -192,6 +222,85 @@ class PrintablePlate extends THREE.Object3D {
             // console.log('不渲染工作区')
         }
         // this.add(workArea);
+    }
+
+    removeArmBaseFootprint() {
+        const footprint = this.getObjectByName(ARM_BASE_FOOTPRINT_NAME);
+        if (footprint) {
+            this.remove(footprint);
+            disposeObject3D(footprint);
+        }
+    }
+
+    // Outline of DexArm's physical base, drawn wherever the work-area outline is
+    // shown. Purely visual: it lives outside modelGroup (so it is never picked)
+    // and is not part of the out-of-bounds check.
+    setUpArmBaseFootprint() {
+        this.removeArmBaseFootprint();
+        if (getIsAdvance() && !this.alwaysAddWorkArea) {
+            return;
+        }
+
+        const {minX, maxX, minY, maxY, cornerRadius: r} = ARM_BASE_FOOTPRINT;
+        const shape = new THREE.Shape();
+        shape.moveTo(minX + r, minY)
+            .lineTo(maxX - r, minY)
+            .absarc(maxX - r, minY + r, r, -Math.PI / 2, 0, false)
+            .lineTo(maxX, maxY - r)
+            .absarc(maxX - r, maxY - r, r, 0, Math.PI / 2, false)
+            .lineTo(minX + r, maxY)
+            .absarc(minX + r, maxY - r, r, Math.PI / 2, Math.PI, false)
+            .lineTo(minX, minY + r)
+            .absarc(minX + r, minY + r, r, Math.PI, Math.PI * 1.5, false);
+
+        const footprint = new THREE.Group();
+        footprint.name = ARM_BASE_FOOTPRINT_NAME;
+        // Slightly below the plate so user models always draw on top.
+        footprint.position.z = -0.1;
+
+        const fill = new THREE.Mesh(
+            new THREE.ShapeBufferGeometry(shape),
+            new THREE.MeshBasicMaterial({
+                color: ARM_BASE_FOOTPRINT_COLOR,
+                transparent: true,
+                opacity: 0.12,
+                depthWrite: false,
+                side: THREE.DoubleSide
+            })
+        );
+        footprint.add(fill);
+
+        const outline = new THREE.LineLoop(
+            new THREE.BufferGeometry().setFromPoints(shape.getPoints(8)),
+            new THREE.LineDashedMaterial({
+                color: ARM_BASE_FOOTPRINT_COLOR,
+                dashSize: 4,
+                gapSize: 2,
+                transparent: true,
+                opacity: 0.8,
+                depthWrite: false
+            })
+        );
+        outline.computeLineDistances();
+        footprint.add(outline);
+
+        const label = new TextSprite({
+            x: 0,
+            y: (minY + maxY) / 2,
+            z: 0,
+            size: 12,
+            text: i18next.t('DexArm Base'),
+            color: ARM_BASE_FOOTPRINT_COLOR,
+            opacity: 0.9
+        });
+        footprint.add(label);
+
+        footprint.traverse((child) => {
+            child.renderOrder = -1;
+            child.raycast = () => {};
+        });
+
+        this.add(footprint);
     }
 }
 

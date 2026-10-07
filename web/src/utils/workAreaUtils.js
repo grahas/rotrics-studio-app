@@ -171,6 +171,26 @@ const LIMIT = [
     191.8, 106.2,		//167.0
 ]
 
+/**
+ * Footprint of DexArm's fixed base (the part that sits on the table), in the
+ * arm's coordinate frame: mm, origin on the base rotation axis, +Y pointing
+ * toward the work area (the arm's reach direction).
+ *
+ * Measured from the base CAD mesh `00-B_Fix.stl` in the community DexArm URDF
+ * (https://github.com/mounteverset/dexarm_description, urdf/STL/00-B_Fix.stl),
+ * whose "bases" revolute joint sits at the mesh origin. Rotrics does not publish
+ * base dimensions, so these are best-available values: a 128 x 145 mm rounded
+ * rectangle (R12.5 corners) that is offset 5 mm toward the work area
+ * (x: -64..64, y: -67.5..77.5).
+ */
+export const ARM_BASE_FOOTPRINT = {
+    minX: -64,
+    maxX: 64,
+    minY: -67.5,
+    maxY: 77.5,
+    cornerRadius: 12.5
+};
+
 export const getLimit = (z, frontEnd) => {
     if (z < Z_MIN || z > Z_MAX) {
         return;
