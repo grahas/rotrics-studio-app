@@ -9,7 +9,8 @@ import Router from 'koa-router';
 import serve from 'koa-static';
 import isElectron from 'is-electron';
 import {getImageSize, getUniqueFilename} from './utils/index.js';
-import serialPortManager from './serialPortManager.js';
+import linkClient from './linkClient.js';
+import discoveryManager from './discoveryManager.js';
 import generateToolPathLines from './toolPath/generateToolPathLines.js';
 import gcodeSender from './gcode/gcodeSender.js';
 import frontEndPositionMonitor from "./frontEndPositionMonitor";
@@ -17,13 +18,13 @@ import p3dStartSlice from './p3dStartSlice.js';
 import {checkFileExist} from "./utils/fsUtils";
 import storeManager from './storeManager.js';
 import {
-    SERIAL_PORT_PATH_UPDATE,
     SERIAL_PORT_GET_OPENED,
     SERIAL_PORT_OPEN,
     SERIAL_PORT_CLOSE,
     SERIAL_PORT_ERROR,
     SERIAL_PORT_DATA,
     SERIAL_PORT_WRITE,
+    NETWORK_DEVICE_LIST_UPDATE,
     TOOL_PATH_GENERATE_LASER,
     TOOL_PATH_GENERATE_WRITE_AND_DRAW,
 
@@ -309,17 +310,20 @@ const setupSocket = () => {
                 console.log('socket io server -> disconnect');
                 //必须remove all，否则多次触发event，且内存泄漏
                 socket.removeAllListeners();
-                serialPortManager.removeAllListeners();
+                linkClient.removeAllListeners();
+                discoveryManager.removeAllListeners();
                 gcodeSender.removeAllListeners();
                 frontEndPositionMonitor.removeAllListeners();
             });
 
             //注意：最好都使用箭头函数，否则this可能指向其他对象
-            //serial port
-            serialPortManager.on(SERIAL_PORT_PATH_UPDATE, (paths) => {
-                socket.emit(SERIAL_PORT_PATH_UPDATE, paths);
+            //network device discovery (mDNS/status API) - the only way the app finds
+            //connection targets now, whether that's the Electron-bundled local
+            //untether instance or a remote Raspberry Pi one.
+            discoveryManager.on(NETWORK_DEVICE_LIST_UPDATE, (devices) => {
+                socket.emit(NETWORK_DEVICE_LIST_UPDATE, devices);
             });
-            
+
             frontEndPositionMonitor.registerListeners();
             frontEndPositionMonitor.on(FRONT_END_POSITION_MONITOR, (position) => {
                 console.log('socket emit postion', position)
@@ -332,29 +336,30 @@ const setupSocket = () => {
             });
 
             socket.on(SERIAL_PORT_GET_OPENED, () => {
-                const path = serialPortManager.getOpened();
+                const path = linkClient.getOpened();
                 socket.emit(SERIAL_PORT_GET_OPENED, path);
             });
 
-            socket.on(SERIAL_PORT_OPEN, path => {
-                serialPortManager.open(path)
+            //{host, port} of an untether endpoint (discovered via mDNS/status API)
+            socket.on(SERIAL_PORT_OPEN, ({host, port}) => {
+                linkClient.open({host, port});
                 // Debug 解决“G-code sending task started, please do not repeat”报错导致无法操作机械臂的bug
                 console.log('gcodeSender 重置状态为 idle')
                 gcodeSender.curStatus = 'idle'
             });
-            socket.on(SERIAL_PORT_CLOSE, () => serialPortManager.close());
-            socket.on(SERIAL_PORT_WRITE, data => serialPortManager.write(data));
+            socket.on(SERIAL_PORT_CLOSE, () => linkClient.close());
+            socket.on(SERIAL_PORT_WRITE, data => linkClient.write(data));
 
-            serialPortManager.on(SERIAL_PORT_OPEN, (path) => {
+            linkClient.on(SERIAL_PORT_OPEN, (path) => {
                 socket.emit(SERIAL_PORT_OPEN, path);
             });
-            serialPortManager.on(SERIAL_PORT_CLOSE, (path) => {
+            linkClient.on(SERIAL_PORT_CLOSE, (path) => {
                 socket.emit(SERIAL_PORT_CLOSE, path);
             });
-            serialPortManager.on(SERIAL_PORT_ERROR, (error) => {
+            linkClient.on(SERIAL_PORT_ERROR, (error) => {
                 socket.emit(SERIAL_PORT_ERROR, error);
             });
-            serialPortManager.on(SERIAL_PORT_DATA, (data) => {
+            linkClient.on(SERIAL_PORT_DATA, (data) => {
                 socket.emit(SERIAL_PORT_DATA, data);
             });
 

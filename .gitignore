@@ -8,6 +8,7 @@
 /server/CuraEngine/config/active.def.json
 /server/static/code/my_projects
 /server/CuraEngine/config/fdmprinter.def.json
+/server/test/integration/.cache
 
 #web
 /web/node_modules
@@ -22,6 +23,8 @@
 /electron/output
 /electron/static
 /electron/package-lock.json
+/electron/resources/untether
+/electron/.cache
 
 # Development Env (Jetbrains, Vim, macOS)
 .idea/

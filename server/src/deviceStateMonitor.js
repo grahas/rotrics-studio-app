@@ -1,5 +1,5 @@
 import EventEmitter from 'events';
-import serialPortManager from './serialPortManager.js';
+import linkClient from './linkClient.js';
 import {SERIAL_PORT_DATA} from "./constants";
 
 class DeviceStateMonitor extends EventEmitter {
@@ -7,7 +7,7 @@ class DeviceStateMonitor extends EventEmitter {
         super();
         this.isLaserCoverOpened = false;
 
-        serialPortManager.on(SERIAL_PORT_DATA, ({received}) => {
+        linkClient.on(SERIAL_PORT_DATA, ({received}) => {
             if (received === 'Warning!Laser protection door opened') {
                 this.isLaserCoverOpened = true;
             } else if (received === 'Laser protection door closed') {

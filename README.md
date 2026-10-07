@@ -8,10 +8,9 @@ Configure environment variables: python, java
 Configure cnpm: https://developer.aliyun.com/mirror/NPM?from=tnpm
 Install git bash (not needed on mac; on windows you need a linux terminal; git bash works well)
 
-Compiling serialport and rotrics-scratch-blocks both require python2.7
-Install the latest Visual Studio (choose the Professional edition) (required when compiling serialport)
-When installing, make sure to select "Desktop development with C++" under the workload options
-Otherwise you will get the error: "Visual Studio C++ core feature" missing
+Compiling rotrics-scratch-blocks requires python2.7
+
+Install Go (>=1.21) if you'll be running `electron/`: it's used to build the bundled [`untether`](https://github.com/grahas/untether) binary from source (see "Connecting to a DexArm" below). `server/` and `web/` don't need Go.
 
 ## 2. Clone the code and install dependencies
 ```bash
@@ -39,9 +38,6 @@ cd rotrics-studio-app/electron
 #electron is used for packaging, it's special and must be installed using npm; cnpm and npm are not the same;
 #if installed with cnpm, the packaged app will open extremely slowly; please be patient, it may take half an hour
 npm install
-#recompile the native module (currently only serialport is used), to make sure it matches the electron node version;
-#please be patient, it may take half an hour
-npm run rebuild  
 ```
 
 ## 3. Other
@@ -62,6 +58,7 @@ cd rotrics-studio-app/web
 npm start
 ##if everything is working, you should be able to see the page displayed normally at: http://localhost:8080/  
 ``` 
+Dev-mode server/web don't bundle or spawn anything - see "Connecting to a DexArm" below for how to get a DexArm connection target while developing outside Electron.
 
 ## 5. Running in the Electron environment
 ```bash
@@ -73,7 +70,8 @@ npm run build
 
 cd rotrics-studio-app/electron
 npm start
-# if you get a message that the serialport version does not match the electron node version, run: npm run rebuild
+# first run (or a changed UNTETHER_COMMIT) builds the untether binary from
+# source with Go; this can take a minute. See "Connecting to a DexArm" below.
 ```
 
 ## 6. Packaging Electron
@@ -100,14 +98,20 @@ When running inside electron, the port is obtained dynamically, and the local se
 so that the web client can retrieve it conveniently, since a socket connection and the http api have not been established yet
 When electron executes main.js, it first starts the local server, and only after that succeeds does it load the index.html built from the web client
 
+# Connecting to a DexArm
+`server/` has no direct USB-serial code path anymore; it only ever speaks the [`untether`](https://github.com/grahas/untether) TCP protocol (`server/src/linkClient.js`), and discovers reachable arms via mDNS and untether's local status API (`server/src/discoveryManager.js`). "USB mode" is just an `untether` daemon instance that talks to the arm over serial on your behalf:
+
+- **Packaged/Electron app**: `electron/main.js` bundles and spawns a local `untether` binary (fetched/built from source per-platform by `electron/scripts/fetch-untether.js`, run automatically before `npm start`/packaging) bound to `127.0.0.1:8437`, named `"<hostname> (This Computer)"`. It shows up in the connection dropdown like any other discovered device - there's no special-casing between a local and a remote (e.g. Raspberry Pi) instance.
+- **Dev mode** (`npm start` in `server/`, outside Electron): nothing spawns `untether` for you. Run one manually against your DexArm's USB port, e.g. `untether run` (see grahas/untether's README for build/run instructions, or reuse `electron/scripts/fetch-untether.js`'s output binary) - the app will discover it the same way it discovers any other instance.
+- Because `untether` is exclusive-access, only one client can hold an arm at a time; the connection dropdown shows arms already in use by another client as disabled.
+
 ## Notes
 node: >=14.1.0
 electron: >=9.0.0  
-serialport: >=9.0.0   
+go: >=1.21 (electron/ only, to build the bundled untether binary)
 
-If you get a message that the serialport version does not match the electron node version, run: npm run rebuild
-The serialport version that electron depends on must match the electron node version, so a rebuild is required
-The dependencies in the package.json files of electron and server must stay consistent
+electron and server's package.json dependencies must stay consistent
 Under electron, node_modules must be installed using npm, not cnpm
 
 Make sure the content of these two files stays consistent: server/src/constants.js and web/src/constants.js
+

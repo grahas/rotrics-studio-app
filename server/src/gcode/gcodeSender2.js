@@ -1,5 +1,5 @@
 import EventEmitter from 'events';
-import serialPortManager from '../serialPortManager.js';
+import linkClient from '../linkClient.js';
 import {string2utf8bytes, calculateXOR} from '../utils/index.js';
 import {GCODE_SENDER_REFUSE, GCODE_SENDER_STATUS_CHANGE} from "../constants";
 
@@ -87,7 +87,7 @@ class GcodeSender extends EventEmitter {
             // }
             // // console.log(this.lines)
             // console.log("#Resend: ", index, line)
-            // serialPortManager.write(`${line}\n`);
+            // linkClient.write(`${line}\n`);
         }
     }
 
@@ -121,7 +121,7 @@ class GcodeSender extends EventEmitter {
             this.curStatus = "idle";
         } else if (this.lineCountSend < this.lineCountTotal && this.lineCountTotal > 0) {
             const line = this.lines[this.lineCountSend++];
-            serialPortManager.write(`${line}\n`);
+            linkClient.write(`${line}\n`);
             const seconds = new Date().getSeconds();
             console.log("send: " + [this.lineCountTotal, this.lineCountSend, this.okCount, line, seconds].join("/"))
         } else {
@@ -136,7 +136,7 @@ class GcodeSender extends EventEmitter {
      */
     start(gcode, isTask, isLaser) {
         console.log("# start")
-        if (!serialPortManager.getOpened()) {
+        if (!linkClient.getOpened()) {
             const msg = "Please connect DexArm first";
             this.emit(GCODE_SENDER_REFUSE, {msg});
             return;
@@ -205,7 +205,7 @@ class GcodeSender extends EventEmitter {
      */
     pauseTask() {
         console.log("# pauseTask")
-        if (!serialPortManager.getOpened()) {
+        if (!linkClient.getOpened()) {
             const msg = "Please connect DexArm first";
             this.emit(GCODE_SENDER_REFUSE, {msg});
             return;
@@ -250,7 +250,7 @@ class GcodeSender extends EventEmitter {
 
     resumeTask() {
         console.log("# resumeTask")
-        if (!serialPortManager.getOpened()) {
+        if (!linkClient.getOpened()) {
             const msg = "Please connect DexArm first";
             this.emit(GCODE_SENDER_REFUSE, {msg});
             return;
@@ -300,7 +300,7 @@ class GcodeSender extends EventEmitter {
 
     stopTask() {
         console.log("# stopTask")
-        if (!serialPortManager.getOpened()) {
+        if (!linkClient.getOpened()) {
             const msg = "Please connect DexArm first";
             this.emit(GCODE_SENDER_REFUSE, {msg});
             return;

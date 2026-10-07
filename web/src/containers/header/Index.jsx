@@ -20,42 +20,44 @@ const notificationKeyDisconnected = getUuid();
 class Index extends React.Component {
     state = {
         serialPortModalVisible: false,
-        selectedPath: undefined, //当前选中的serial port path; 使用undefined而不是null，是因为undefined情况下，Select才会显示placeholder
+        selectedId: undefined, //当前选中的dexarm-link设备id(host:port); 使用undefined而不是null，是因为undefined情况下，Select才会显示placeholder
     };
 
     componentWillReceiveProps(nextProps) {
-        if (this.props.paths.length > 0) {
-            const countDif = nextProps.paths.length - this.props.paths.length;
+        const prevIds = this.props.networkDevices.map(d => d.id);
+        const nextIds = nextProps.networkDevices.map(d => d.id);
+        if (prevIds.length > 0) {
+            const countDif = nextIds.length - prevIds.length;
             if (countDif === 1) {
-                const dif = _.difference(nextProps.paths, this.props.paths);
+                const dif = _.difference(nextIds, prevIds);
                 notificationI18n.success({
                     key: notificationKeyConnected,
-                    message: 'Cable Inserted',
+                    message: 'New Device Found',
                     description: dif[0],
                     // duration: 3
                 });
                 notificationI18n.close(notificationKeyDisconnected);
             } else if (countDif === -1) {
-                const dif = _.difference(this.props.paths, nextProps.paths);
+                const dif = _.difference(prevIds, nextIds);
                 notificationI18n.error({
                     key: notificationKeyDisconnected,
-                    message: 'Cable Cable Pulled Out',
+                    message: 'Device No Longer Available',
                     description: dif[0],
                     duration: 1 //设置延时，防止调平断联时消息不消失
                 });
                 notificationI18n.close(notificationKeyConnected)
             }
         }
-        if (this.props.paths.includes(this.state.selectedPath) && !nextProps.paths.includes(this.state.selectedPath)) {
-            this.setState({selectedPath: undefined});
+        if (prevIds.includes(this.state.selectedId) && !nextIds.includes(this.state.selectedId)) {
+            this.setState({selectedId: undefined});
         }
     }
 
     actions = {
         openSerialPortModal: () => {
-            if (!this.state.selectedPath) {
+            if (!this.state.selectedId) {
                 this.setState({
-                    selectedPath: this.props.path,
+                    selectedId: this.props.path,
                 });
             }
             this.setState({
@@ -68,13 +70,15 @@ class Index extends React.Component {
             });
         },
         openSerialPort: () => {
-            this.props.openSerialPort(this.state.selectedPath)
+            const device = this.props.networkDevices.find(d => d.id === this.state.selectedId);
+            if (!device) return;
+            this.props.openSerialPort({host: device.host, port: device.port})
         },
         closeSerialPort: () => {
             this.props.closeSerialPort()
         },
-        selectPath: (selectedPath) => {
-            this.setState({selectedPath})
+        selectPath: (selectedId) => {
+            this.setState({selectedId})
         },
         emergencyStop: () => {
             this.props.startTask('M410\n');
@@ -100,12 +104,12 @@ class Index extends React.Component {
     render() {
         const actions = this.actions;
         const state = this.state;
-        const {paths, path, terminalVisible, jogPanelVisible} = this.props;
-        const {selectedPath} = state;
+        const {networkDevices, path, terminalVisible, jogPanelVisible} = this.props;
+        const {selectedId} = state;
         const {t} = this.props;
         let statusDes = "";
-        if (selectedPath) {
-            if (path === selectedPath) {
+        if (selectedId) {
+            if (path === selectedId) {
                 statusDes = "Connected"
             } else {
                 statusDes = "Disconnected"
@@ -114,11 +118,11 @@ class Index extends React.Component {
 
         let connectDisabled = false;
         let disconnectDisabled = false;
-        if (!selectedPath) {
+        if (!selectedId) {
             connectDisabled = true;
             disconnectDisabled = true;
         } else {
-            if (selectedPath === path) {
+            if (selectedId === path) {
                 connectDisabled = true;
                 disconnectDisabled = false;
             } else {
@@ -127,10 +131,31 @@ class Index extends React.Component {
             }
         }
 
-        const options = [];
-        for (let i = 0; i < paths.length; i++) {
-            options.push({label: paths[i], value: paths[i]})
-        }
+        // Purely a UX nicety: flag the Electron-bundled local untether
+        // instance (bound to loopback) so it's easy to tell apart from a
+        // remote Raspberry Pi device in the list - not a functional branch,
+        // both are opened the exact same way.
+        const isLocalDevice = (device) => device.host === '127.0.0.1' || device.host === 'localhost';
+
+        const options = networkDevices.map((device) => {
+            // connected===false: the daemon advertised the device but lost contact with
+            // the arm (unplugged/powered off) - connecting would fail immediately.
+            // inUse: another client already holds an exclusive session with this arm.
+            // compatible===false: protocol/profile version this app doesn't support.
+            const disconnected = device.connected === false;
+            const inUse = device.inUse === true;
+            const incompatible = device.compatible === false;
+            let suffix = '';
+            if (isLocalDevice(device)) suffix += ` (${t('This Computer')})`;
+            if (disconnected) suffix += ` - ${t('disconnected')}`;
+            else if (inUse) suffix += ` - ${t('in use by another client')}`;
+            else if (incompatible) suffix += ` - ${t('update required')}`;
+            return {
+                label: `${device.deviceName}${suffix}`,
+                value: device.id,
+                disabled: disconnected || inUse || incompatible,
+            };
+        });
         return (
             <div
                 style={{
@@ -209,9 +234,9 @@ class Index extends React.Component {
                         <h4>{`${t('Status')}: ${t(statusDes)}`}</h4>
                         <Select
                             style={{width: 300}}
-                            value={selectedPath}
+                            value={selectedId}
                             onChange={actions.selectPath}
-                            placeholder={t("Choose a port")}
+                            placeholder={t("Choose a device")}
                             options={options}/>
                     </Space>
                 </Modal>
@@ -221,11 +246,11 @@ class Index extends React.Component {
 }
 
 const mapStateToProps = (state) => {
-    const {paths, path} = state.serialPort;
+    const {networkDevices, path} = state.serialPort;
     // const {terminalVisible, jogPanelVisible} = state.header;
     const {terminalVisible} = state.taps;
     return {
-        paths,
+        networkDevices,
         path,
         terminalVisible,
         // jogPanelVisible
@@ -234,7 +259,7 @@ const mapStateToProps = (state) => {
 
 const mapDispatchToProps = (dispatch) => {
     return {
-        openSerialPort: (path) => dispatch(serialPortActions.open(path)),
+        openSerialPort: (target) => dispatch(serialPortActions.open(target)),
         closeSerialPort: () => dispatch(serialPortActions.close()),
         serialPortWrite: (gcode) => dispatch(serialPortActions.write(gcode)),
         setTerminalVisible: (value) => dispatch(tapsActions.setTerminalVisible(value)),

@@ -8,7 +8,7 @@ fs.readdirSync('./node_modules')
     })
     .forEach((mod) => {
         if (mod.startsWith('@')) {
-            // scoped packages live one directory deeper (e.g. @serialport/parser-readline)
+            // scoped packages live one directory deeper (e.g. @untether/client)
             fs.readdirSync(path.join('./node_modules', mod)).forEach((scopedMod) => {
                 const name = `${mod}/${scopedMod}`;
                 nodeModules[name] = 'commonjs ' + name;

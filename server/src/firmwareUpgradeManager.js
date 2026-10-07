@@ -1,114 +1,37 @@
 import fs from 'fs';
-import _ from 'lodash';
 import path from 'path';
 import isOnline from "is-online";
 import request from 'request';
-import {SerialPort} from 'serialport';
-import {ReadlineParser as ReadLineParser} from '@serialport/parser-readline';
-import {start_frame, end_frame, eot, chunk_frame} from "./frameUtil.js";
-import serialPortManager from './serialPortManager.js';
+import linkClient from './linkClient.js';
 import gcodeSender from "./gcode/gcodeSender.js";
 
-const baudRate = 115200; // 9600;
-
-const sleep = (time) => {
-    return new Promise(resolve => {
-        setTimeout(resolve, time)
-    })
-};
-
+/**
+ * Firmware upgrade is now built on untether's dexarm-firmware plugin
+ * ($FW_BEGIN/$FW_CHUNK/$FW_ACK/.../$FW_OK over the SAME already-open line
+ * connection to the arm - see grahas/untether's clients/node/README.md and
+ * profiles/dexarm.yaml). The daemon owns the byte-level transfer, the
+ * device-side reboot into the bootloader, and re-detecting the arm as it
+ * re-enumerates; this manager only still does what has to stay client-side:
+ * checking preconditions (step 0), reading the current firmware/hardware
+ * version (step 1), asking Rotrics' cloud API whether an upgrade is needed
+ * and downloading the image if so (steps 2-3), then handing the image to
+ * untether's flasher (steps 4-8).
+ *
+ * step/status/description keep the exact 0-8 / antd-Steps contract the web
+ * firmware dialog already expects (see web/src/reducers/firmwareUpgrade.js):
+ * 0 check, 1 versions, 2 cloud check, 3 download, 4 enter bootloader,
+ * 5 reconnect, 6 upload (NN%), 7 execute, 8 done.
+ */
 class FirmwareUpgradeManager {
     constructor() {
         this.cache_dir = null;
         this.onChange = null;
-        this.serialPort = null;
-        this.path = "";
-        this.readLineParser = null;
-        this.frames = [];
-        this.frameCount = 0;
-        this.curFrame = null;
-        this.cCount = 0;
-        this.isProcessing = false;
-
-        this.onReceiveLine = async (line) => {
-            // console.log("#onReceiveLine: " + line);
-            //"Programming Completed Successfully!": load firmware成功的标志
-            if (line.includes("Programming Completed Successfully!")) {
-                //step-7: Execute firmware
-                this.onChange(7, 'process');
-
-                await sleep(1000);
-                this.write("3");//execute firmware
-
-                //"Start program execution......": execute firmware成功的标志
-                //实际测试发现，有时候可能收不到，此时可认为已经升级成功
-                await sleep(2000);
-                this.onChange(8, 'finish');
-
-                await sleep(2000);
-                serialPortManager.serialPort = null;
-                serialPortManager.open(this.path);
-            }
-        };
-
-        this.onReceiveData = (buffer) => {
-            const callbackProgress = () => {
-                const description = `${Math.floor(100 * (1 - this.frames.length / this.frameCount))}%`;
-                this.onChange(6, 'process', description);
-            };
-
-            //上位机收到第1个C，则发送frame-0
-            //下位机收到frame-0，依次发送ACK，C
-            //上位机收到第2个C，发送frame-1
-            //下位机收到frame-1，发送ACK
-            //后面都是收到则发送ACK
-            if (Buffer.isBuffer(buffer)) {
-                const value = buffer.readUInt8(0);
-                switch (value) {
-                    case 0x43://C
-                        console.log("##-> C :" + this.cCount);
-                        if (this.cCount === 0) {
-                            ++this.cCount;
-                            this.curFrame = this.frames.shift(); //frame-0
-                            this.write(this.curFrame);
-                            callbackProgress();
-                        } else if (this.cCount === 1) {
-                            ++this.cCount;
-                            this.curFrame = this.frames.shift(); //frame-1
-                            this.write(this.curFrame);
-                            callbackProgress();
-                        }
-                        break;
-                    case 0x06: //ACK
-                        // console.log("##-> ACK");
-                        if (this.cCount === 2) {
-                            this.curFrame = this.frames.shift();
-                            if (this.curFrame) {
-                                this.write(this.curFrame);
-                                callbackProgress();
-                            }
-                        }
-                        break;
-                    case 0x15: //Re-Send
-                        console.log("##-> Re-Send");
-                        if (this.curFrame) {
-                            this.write(this.curFrame);
-                        } else {
-                            console.log("## re-send err: curFrame is null")
-                        }
-                        break;
-                    default:
-                        console.log("##-> Unknown: 0x%s\n", value.toString(16));
-                        break;
-                }
-            }
-        };
     }
 
     /**
      * @param cache_dir 缓存目录，固件文件将下载到此目录
-     * @param onChange 回调函数，onChange(current, status, description)
-     * @param isInBootLoader 当前是否处于boot loader模式下
+     * @param isInBootLoader 当前是否处于boot loader模式下（恢复模式：设备已经卡在bootloader时使用）
+     * @param onChange 回调函数，onChange(step, status, description)
      * step: 和web/src/reducers/firmwareUpgrade保持一致
      * status: 和antd step保持一致 https://ant.design/components/steps-cn/
      * @returns {Promise<void>}
@@ -116,17 +39,11 @@ class FirmwareUpgradeManager {
     async start(cache_dir, isInBootLoader, onChange) {
         this.cache_dir = cache_dir;
         this.onChange = onChange;
-        this.serialPort = serialPortManager.serialPort;
-        this.path = serialPortManager.getOpened();
-        this.frames = [];
-        this.frameCount = 0;
-        this.curFrame = null;
-        this.cCount = 0;
 
         //step-0: Check
         //是否连接，是否正在发送gcode，网络是否可用
         this.onChange(0, 'process');
-        if (!this.path) {
+        if (!linkClient.getOpened()) {
             this.onChange(0, 'error', 'Connect DexArm first');
             return;
         }
@@ -139,10 +56,6 @@ class FirmwareUpgradeManager {
             return;
         }
 
-        //remove all listener
-        this.serialPort.removeAllListeners();
-        this.readLineParser = this.serialPort.pipe(new ReadLineParser({delimiter: '\n'}));
-
         if (isInBootLoader) {
             await this.upgrade4bootLoader();
         } else {
@@ -150,92 +63,10 @@ class FirmwareUpgradeManager {
         }
     }
 
-    //跳过step4，5
-    async upgrade4bootLoader() {
-        //step-1: Collect DexArm info
-        this.onChange(1, 'process');
-        const {hardwareVersion} = await this.getDeviceInfo4bootLoader();
-        if (!hardwareVersion) {
-            this.onChange(1, 'error', 'Time out, please retry');
-            return;
-        }
-
-        //step-2: Check need upgrade
-        this.onChange(2, 'process');
-        //必须升级，因此指定firmwareVersion为老版本即可
-        const firmwareVersion = "V2.1.1";
-        const {err: err4needUpgrade, url} = await this.isNeedUpgrade(firmwareVersion, hardwareVersion);
-        if (err4needUpgrade) {
-            this.onChange(2, 'error', err4needUpgrade);
-            return;
-        }
-        if (!url) {
-            this.onChange(2, 'error', "url is null");
-            return;
-        }
-
-        //step-3: Download firmware
-        this.onChange(3, 'process');
-        const {savedPath, filename, err: err4downloadFirmware} = await this.downloadFirmware(this.cache_dir, url);
-        if (err4downloadFirmware) {
-            this.onChange(3, 'error', err4downloadFirmware);
-            return;
-        }
-        this.frames = this.prepareData(savedPath, filename);
-        this.frameCount = this.frames.length;
-        if (this.frameCount === 0) {
-            this.onChange(3, 'error', 'Data is empty');
-            return;
-        }
-
-        //step-6: Load firmware
-        this.onChange(6, 'process');
-        this.serialPort.on("data", this.onReceiveData);
-        this.readLineParser.on('data', this.onReceiveLine);
-        await sleep(2000);
-        //start download firmware to flash
-        this.write("1");
-        //特殊case：发送"1"后，不会执行"download image to the inter flash"
-        //5s后重发
-        await sleep(7000);
-        if (this.cCount === 0) {
-            this.write("1");
-        }
-        await sleep(12000);
-        if (this.cCount === 0) {
-            this.write("1");
-        }
-        if (this.cCount < 2) {
-            this.onChange(6, 'error', "Download firmware to flash failed, please retry");
-        }
-    }
-
-    async getDeviceInfo4bootLoader() {
-        const exe = () => {
-            return new Promise(resolve => {
-                const timerId = setTimeout(() => {
-                    resolve({hardwareVersion: null});
-                }, 15000);
-                this.readLineParser.on('data', (line) => {
-                    console.log("getDeviceInfo4bootLoader received line: " + line);
-                    if (line.startsWith("Hardware Version:")) {
-                        clearTimeout(timerId);
-                        this.readLineParser.removeAllListeners();
-                        const hardwareVersion = line.replace("Hardware Version:", "").replace("\r", "").trim();
-                        console.log("hardwareVersion: " + hardwareVersion)
-                        resolve({hardwareVersion});
-                    }
-                });
-                this.write('a5');
-            });
-        };
-        return await exe();
-    }
-
     async upgrade4app() {
         //step-1: Collect DexArm info
-        let {firmwareVersion, hardwareVersion} = await this.getDeviceInfo4app();
-        // firmwareVersion = "V2.1.1";
+        this.onChange(1, 'process');
+        const {firmwareVersion, hardwareVersion} = await this.getDeviceInfo4app();
         if (!firmwareVersion || !hardwareVersion) {
             this.onChange(1, 'error', 'Time out, please retry');
             return;
@@ -254,64 +85,82 @@ class FirmwareUpgradeManager {
         }
 
         //step-3: Download firmware
+        const buffer = await this.downloadAndRead(url);
+        if (!buffer) return;
+
+        //step-4..8: delegated to untether's $FW_* firmware plugin.
+        await this.flash(buffer, false);
+    }
+
+    //跳过app模式下的版本探测：设备已经卡在bootloader下，不理解gcode
+    async upgrade4bootLoader() {
+        //step-1: Collect DexArm info
+        this.onChange(1, 'process');
+        const hardwareVersion = await this.getHardwareVersion4bootLoader();
+        if (!hardwareVersion) {
+            this.onChange(1, 'error', 'Time out, please retry');
+            return;
+        }
+        //必须升级，因此指定firmwareVersion为老版本即可
+        const firmwareVersion = "V2.1.1";
+
+        //step-2: Check need upgrade
+        this.onChange(2, 'process');
+        const {err: err4needUpgrade, url} = await this.isNeedUpgrade(firmwareVersion, hardwareVersion);
+        if (err4needUpgrade) {
+            this.onChange(2, 'error', err4needUpgrade);
+            return;
+        }
+        if (!url) {
+            this.onChange(2, 'error', "url is null");
+            return;
+        }
+
+        //step-3: Download firmware
+        const buffer = await this.downloadAndRead(url);
+        if (!buffer) return;
+
+        //step-4..8: delegated to untether's $FW_* firmware plugin.
+        await this.flash(buffer, true);
+    }
+
+    async downloadAndRead(url) {
         this.onChange(3, 'process');
-        const {savedPath, filename, err: err4downloadFirmware} = await this.downloadFirmware(this.cache_dir, url);
+        const {savedPath, err: err4downloadFirmware} = await this.downloadFirmware(this.cache_dir, url);
         if (err4downloadFirmware) {
             this.onChange(3, 'error', err4downloadFirmware);
-            return;
+            return null;
         }
-        this.frames = this.prepareData(savedPath, filename);
-        this.frameCount = this.frames.length;
-        if (this.frameCount === 0) {
+        const buffer = fs.readFileSync(savedPath);
+        if (buffer.length === 0) {
             this.onChange(3, 'error', 'Data is empty');
-            return;
+            return null;
         }
+        this.onChange(3, 'finish');
+        return buffer;
+    }
 
-        //step-4: Enter boot loader
-        this.onChange(4, 'process');
-        if (!await this.enterBootLoader()) {
-            this.onChange(4, 'error', "Enter boot loader failed, please retry");
-            return;
-        }
-
-        await sleep(3000);
-
-        //step-5: Connect DexArm
-        this.onChange(5, 'process');
-        //重新open serial port
-        const {err: err4openSerialPort} = await this.openSerialPort();
-        if (err4openSerialPort) {
-            this.onChange(5, 'error', "Connect DexArm failed, please retry. Error message: " + err4openSerialPort);
-            return;
-        }
-
-        //断开后需要重新设置监听
-        this.serialPort.removeAllListeners();
-        this.readLineParser = this.serialPort.pipe(new ReadLineParser({delimiter: '\n'}));
-
-        //step-6: Load firmware
-        this.onChange(6, 'process');
-        this.serialPort.on("data", this.onReceiveData);
-        this.readLineParser.on('data', this.onReceiveLine);
-
-        await sleep(2000);
-        //start download firmware to flash
-        this.write("1");
-
-        //特殊case：发送"1"后，不会执行"download image to the inter flash"
-        //5s后重发
-        await sleep(7000);
-        if (this.cCount === 0) {
-            this.write("1");
-        }
-
-        await sleep(12000);
-        if (this.cCount === 0) {
-            this.write("1");
-        }
-
-        if (this.cCount < 2) {
-            this.onChange(6, 'error', "Download firmware to flash failed, please retry");
+    async flash(buffer, bootloader) {
+        try {
+            await linkClient.flashFirmware(buffer, {
+                bootloader,
+                onStep: (step) => {
+                    //untether's flasher replays its own internal 0-3 steps
+                    //(check/versions/cloud-check/download) for its own
+                    //bookkeeping even though the client already did the
+                    //real work for them above - forwarding those here would
+                    //regress the UI back to an earlier step, so only steps
+                    //4-8 (enter bootloader..done) come from the daemon.
+                    if (step.step < 4) return;
+                    this.onChange(step.step, step.status, step.description);
+                },
+            });
+        } catch (error) {
+            //BusyError/ConnectionClosedError/FirmwareError etc. - report
+            //against whichever step the daemon last reported (falls back to
+            //6, the long-running upload step, if it never got that far).
+            const step = (error && typeof error.step === 'number' && error.step >= 4) ? error.step : 6;
+            this.onChange(step, 'error', error.message);
         }
     }
 
@@ -424,125 +273,59 @@ class FirmwareUpgradeManager {
         return await exe();
     }
 
-    //获取设备的固件，硬件版本号
+    //获取设备的固件，硬件版本号 (app模式)
+    //firmware: untether的$DEVICE_VERSION控制帧（守护进程内部发送M2010并解析回复，见profiles/dexarm.yaml）
+    //hardware: dexarm profile未提供对应的控制帧，和之前一样直接发送M2011并解析回复行
     async getDeviceInfo4app() {
-        const exe = () => {
-            return new Promise(resolve => {
-                let firmwareVersion = null;
-                let hardwareVersion = null;
-                const timerId = setTimeout(() => {
-                    console.log("timeout: getDeviceInfo4app")
-                    resolve({firmwareVersion: null, hardwareVersion: null});
-                }, 10000);
-                this.readLineParser.on('data', (line) => {
-                    console.log("getDeviceInfo4app received line: " + line);
-                    if (line.startsWith("Firmware ")) {
-                        firmwareVersion = line.replace("Firmware", "").replace("\r", "").trim();
-                    }
-                    if (line.startsWith("Hardware ")) {
-                        hardwareVersion = line.replace("Hardware", "").replace("\r", "").trim();
-                    }
-                    if (firmwareVersion && hardwareVersion) {
-                        clearTimeout(timerId);
-                        this.readLineParser.removeAllListeners();
-                        resolve({firmwareVersion, hardwareVersion});
-                    }
-                });
-                this.write('M2010\nM2011\n');
-            });
-        };
-        return await exe();
+        let firmwareVersion = null;
+        try {
+            const version = await linkClient.deviceVersion(10000); //例如"2.1.3"（控制帧的正则分组本身不含"V"前缀）
+            firmwareVersion = version.startsWith('V') ? version : `V${version}`;
+        } catch (error) {
+            console.log("deviceVersion() failed: " + error.message);
+        }
+
+        const hardwareVersion = await this.readLine(10000, (line) => line.startsWith("Hardware "), (line) => {
+            return line.replace("Hardware", "").replace("\r", "").trim();
+        }, 'M2011\n');
+
+        return {firmwareVersion, hardwareVersion};
     }
 
     /**
      * 发"a5"，若收到"Hardware Version:"，则表示在boot loader模式下
-     * 超时无响应，则在app模式下
-     * app模式下，发M2002，M2003进入boot loader模式，串口会断开，需要再次连接
-     * @returns {Promise<{connected, hardwareVersion, isBootLoader}>}
+     * @returns {Promise<string|null>}
      */
-    async enterBootLoader() {
-        const exe = () => {
-            return new Promise(resolve => {
-                const timerId = setTimeout(() => {
-                    resolve(false);
-                }, 20000);
-                this.readLineParser.on('data', (line) => {
-                    console.log("enterBootLoader received line: " + line);
-                    //Ready to enter update bootloader, please use M2003 confirm or M2004 cancel
-                    //测试发现，"Reset to enter update bootloader"可能收不到，但是已经进入boot loader
-                    if (line.includes("Reset to enter update bootloader") || line.includes("Ready to enter update bootloader") ) {
-                        clearTimeout(timerId);
-                        this.readLineParser.removeAllListeners();
-                        resolve(true);
-                    }
-                });
-                this.write('M203 X300 Y300 Z300 E100\nM205 X10 Y10 Z10 E20\nM92 E379.20\nM500\nM2002\nM2003\n');
-            });
-        };
-        return await exe();
+    async getHardwareVersion4bootLoader() {
+        return this.readLine(15000, (line) => line.startsWith("Hardware Version:"), (line) => {
+            return line.replace("Hardware Version:", "").replace("\r", "").trim();
+        }, 'a5');
     }
 
-    async openSerialPort() {
-        const exe = () => {
-            return new Promise(resolve => {
-                this.serialPort = new SerialPort({path: this.path, baudRate, autoOpen: false});
-                this.serialPort.open((error) => {
-                    if (error) {
-                        console.log("open sp failed: " + error.message)
-                        resolve({err: error.message});
-                        return;
-                    }
-                    resolve({err: null});
-                });
-            });
-        };
-        return await exe();
-    }
-
-    write(data) {
-        this.serialPort.write(data, (error) => {
-            if (error) {
-                console.error("###write error: " + data);
-            } else {
-                // console.log("write ok: " + data);
-                if (typeof data === "string") {
-                    console.log("write ok: " + data);
-                }
-                // console.log("write ok:");
+    //向linkClient写入data，等待匹配predicate的行并用extract提取结果；超时或连接未打开时返回null
+    readLine(timeoutMs, predicate, extract, data) {
+        return new Promise((resolve) => {
+            const parser = linkClient.readLineParser;
+            if (!parser) {
+                resolve(null);
+                return;
             }
-        })
+            const onData = (line) => {
+                console.log("readLine received line: " + line);
+                if (predicate(line)) {
+                    clearTimeout(timerId);
+                    parser.removeListener('data', onData);
+                    resolve(extract(line));
+                }
+            };
+            const timerId = setTimeout(() => {
+                parser.removeListener('data', onData);
+                resolve(null);
+            }, timeoutMs);
+            parser.on('data', onData);
+            linkClient.write(data);
+        });
     }
-
-    prepareData(firmwarePath, firmwareName) {
-        const buffers = [];
-        const file = fs.readFileSync(firmwarePath);
-
-        //start frame
-        const startFrame = start_frame(firmwareName, file.length);
-        buffers.push(startFrame);
-
-        //chunk frame
-        const chunks = _.chunk(file, 128);
-        for (let i = 0; i < chunks.length; i++) {
-            const data = Buffer.from(chunks[i]);
-            const chunkFrame = chunk_frame(data, i + 1);
-            buffers.push(chunkFrame)
-        }
-
-        //eot
-        const eotFrame = eot();
-        buffers.push(eotFrame);
-
-        //end frame
-        const endFrame = end_frame();
-        buffers.push(endFrame);
-
-        console.log("file length: " + file.length)
-        console.log("chunks length: " + chunks.length)
-        console.log("buffers length: " + buffers.length)
-
-        return buffers;
-    };
 }
 
 const firmwareUpgradeManager = new FirmwareUpgradeManager();

@@ -1,7 +1,7 @@
 import messageI18n from "../utils/messageI18n";
 import socketClientManager from "../socket/socketClientManager";
 import {
-    SERIAL_PORT_PATH_UPDATE,
+    NETWORK_DEVICE_LIST_UPDATE,
     SERIAL_PORT_GET_OPENED,
     SERIAL_PORT_OPEN,
     SERIAL_PORT_CLOSE,
@@ -17,8 +17,8 @@ import { message } from "antd";
 const ACTION_UPDATE_STATE = 'serialPort/ACTION_UPDATE_STATE';
 
 const INITIAL_STATE = {
-    paths: [],
-    path: null, //当前已连接的serial port的path; path为空，则表示serial port close；否则open
+    networkDevices: [], // dexarm-link endpoints discovered via mDNS: {id, deviceName, host, port, model}
+    path: null, //当前已连接的dexarm-link endpoint的"host:port"标识; path为空，则表示连接关闭；否则已连接
     serialPortReceive: '' // 最近一条串口接收到的消息
 };
 
@@ -98,14 +98,14 @@ const processM2101 = (received) => {
 export const actions = {
     init: () => (dispatch) => {
         socketClientManager.addServerListener("connect", () => {
-            dispatch(actions._updateState({paths: [], path: null}));
+            dispatch(actions._updateState({path: null}));
             socketClientManager.emitToServer(SERIAL_PORT_GET_OPENED);
         });
         socketClientManager.addServerListener("disconnect", () => {
-            dispatch(actions._updateState({paths: [], path: null}));
+            dispatch(actions._updateState({path: null}));
         });
-        socketClientManager.addServerListener(SERIAL_PORT_PATH_UPDATE, (paths) => {
-            dispatch(actions._updateState({paths}));
+        socketClientManager.addServerListener(NETWORK_DEVICE_LIST_UPDATE, (networkDevices) => {
+            dispatch(actions._updateState({networkDevices}));
         });
         socketClientManager.addServerListener(SERIAL_PORT_GET_OPENED, (path) => {
             dispatch(actions._updateState({path}));
@@ -160,9 +160,10 @@ export const actions = {
             state
         };
     },
-    open: (path) => () => {
-        console.log("path: " + path)
-        socketClientManager.emitToServer(SERIAL_PORT_OPEN, path);
+    //target: {host, port} of a dexarm-link endpoint (local bundled instance or remote device)
+    open: ({host, port}) => () => {
+        console.log(`connecting to dexarm-link endpoint: ${host}:${port}`)
+        socketClientManager.emitToServer(SERIAL_PORT_OPEN, {host, port});
         return {type: null};
     },
     //close当前已连接的串口

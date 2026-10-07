@@ -7,30 +7,30 @@ import {
     TEMPERATURE_MONITOR
 } from "./constants";
 import EventEmitter from "events";
-import serialPortManager from "./serialPortManager";
+import linkClient from "./linkClient";
 
 class FrontEndPositionMonitor extends EventEmitter {
     registerListeners() {
-        serialPortManager.on(SERIAL_PORT_OPEN, () => {
+        linkClient.on(SERIAL_PORT_OPEN, () => {
             this.onOpen();
         });
-        serialPortManager.on(SERIAL_PORT_CLOSE, () => {
+        linkClient.on(SERIAL_PORT_CLOSE, () => {
             this.onClose();
         });
-        serialPortManager.on(SERIAL_PORT_ERROR, () => {
+        linkClient.on(SERIAL_PORT_ERROR, () => {
             this.onError();
         });
-        serialPortManager.on(SERIAL_PORT_DATA, ({received}) => {//read
+        linkClient.on(SERIAL_PORT_DATA, ({received}) => {//read
             // console.log('接收 read SERIAL_PORT_DATA')
             // console.log(received)
             this.onRead(received);
         });
-        serialPortManager.on(SERIAL_PORT_WRITE_OK, (data) => {//write
+        linkClient.on(SERIAL_PORT_WRITE_OK, (data) => {//write
             // console.log('接收 write SERIAL_PORT_WRITE_OK')
             // console.log(received)
             this.onWrite(data);
         });
-        serialPortManager.on(SERIAL_PORT_WRITE_ERROR, (data) => {
+        linkClient.on(SERIAL_PORT_WRITE_ERROR, (data) => {
             this.onWriteError();
         });
     }
