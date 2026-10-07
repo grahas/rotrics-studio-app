@@ -25,6 +25,7 @@
 /electron/package-lock.json
 /electron/resources/untether
 /electron/.cache
+/electron/electron.log
 
 # Development Env (Jetbrains, Vim, macOS)
 .idea/
