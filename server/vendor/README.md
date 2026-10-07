@@ -39,6 +39,6 @@ host just skips it, which is fine since nothing in that context manages
 process lifetime via timers anyway).
 
 This is an upstream fix that belongs in `grahas/untether` itself (filed as
-grahas/untether#7) - once it lands there, re-run
-`node server/scripts/update-untether-client.js` to pick up the real, patched
-upstream commit and drop this local patch note.
+grahas/untether#7, fix proposed in grahas/untether#8 with a regression test)
+- once it merges there, re-run `node server/scripts/update-untether-client.js`
+to pick up the real, patched upstream commit and drop this local patch note.
